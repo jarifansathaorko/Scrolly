@@ -29,6 +29,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.GroupAdd
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
+import android.content.Intent
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,8 +74,37 @@ fun ProfileScreen(
     viewModel: ProfileViewModel,
     modifier: Modifier = Modifier
 ) {
-    val profile = viewModel.userProfile
+    val profile by viewModel.userProfile.collectAsStateWithLifecycle()
     val achievements by viewModel.achievements.collectAsStateWithLifecycle()
+    val friends by viewModel.friends.collectAsStateWithLifecycle()
+    
+    var showEditUsernameDialog by remember { mutableStateOf(false) }
+    var newUsername by remember { mutableStateOf("") }
+    val context = LocalContext.current
+
+    if (showEditUsernameDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditUsernameDialog = false },
+            title = { Text("Edit Username") },
+            text = {
+                OutlinedTextField(
+                    value = newUsername,
+                    onValueChange = { newUsername = it },
+                    label = { Text("Username") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.updateUsername(newUsername)
+                    showEditUsernameDialog = false
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditUsernameDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     Column(
         modifier = modifier
@@ -100,13 +142,30 @@ fun ProfileScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Text(
-                    text = "@${profile.username}",
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = SleekTextPrimary
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clickable { 
+                            newUsername = profile.username
+                            showEditUsernameDialog = true
+                        }
+                        .padding(4.dp)
+                ) {
+                    Text(
+                        text = "@${profile.username}",
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = SleekTextPrimary
+                        )
                     )
-                )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Edit Username",
+                        tint = SleekTextMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
 
                 Text(
                     text = "Level ${profile.currentLevel} Focus Scholar",
@@ -366,12 +425,91 @@ fun ProfileScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "Scrolly tracks scrolling behavior, not what you are watching. We never record video titles, messages, passwords, or personal screens. All statistics remain exclusively on your device.",
+                    text = "Scrolly tracks scrolling behavior, not what you are watching. We never record video titles, messages, passwords, or personal screens. All statistics remain exclusively on your device (unless you explicitly connect with friends).",
                     style = MaterialTheme.typography.bodySmall.copy(
                         color = SleekTextSecondary,
                         lineHeight = 18.sp
                     )
                 )
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(24.dp))
+        
+        // --- FRIENDS & INVITE SECTION ---
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .border(1.dp, SleekBorder, RoundedCornerShape(24.dp)),
+            colors = CardDefaults.cardColors(containerColor = SleekCardSurface)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp)
+            ) {
+                Text(
+                    text = "Friends",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = SleekTextPrimary
+                    )
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                if (friends.isEmpty()) {
+                    Text(
+                        text = "You haven't connected with any friends yet.",
+                        style = MaterialTheme.typography.bodySmall.copy(color = SleekTextMuted)
+                    )
+                } else {
+                    friends.forEach { friend ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "@${friend.username}",
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = SleekTextPrimary
+                                )
+                            )
+                            Text(
+                                text = "${friend.todayScrolls} scrolls today",
+                                style = MaterialTheme.typography.bodySmall.copy(color = SleekPrimary)
+                            )
+                        }
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Button(
+                    onClick = {
+                        val uid = viewModel.getMyUid()
+                        if (uid != null) {
+                            val inviteLink = "scrolly://invite?uid=$uid"
+                            val sendIntent = Intent().apply {
+                                action = Intent.ACTION_SEND
+                                putExtra(Intent.EXTRA_TEXT, "Connect with me on Scrolly and let's battle our screen time! $inviteLink")
+                                type = "text/plain"
+                            }
+                            context.startActivity(Intent.createChooser(sendIntent, "Invite Friend"))
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = SleekPrimary),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.GroupAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Invite a Friend", fontWeight = FontWeight.Bold)
+                }
             }
         }
 

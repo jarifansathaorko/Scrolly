@@ -126,9 +126,12 @@ class ScrollDetectionEngine(
                 return false
             }
 
-            // If vertical delta is reported and non-zero
-            if (deltaY != 0) {
+            // If vertical delta is reported and positive (down scroll)
+            if (deltaY > 0) {
                 return true
+            } else if (deltaY < 0) {
+                // Up scroll, ignore
+                return false
             }
         }
 
@@ -467,7 +470,8 @@ class ScrollDetectionEngine(
 
         // Validated vertical reel swipe!
         lastScrollTimestamp = now
-        cachedIsReelContext = true
+        // Do not force cachedIsReelContext = true here, rely on evaluateScreenContext
+        // to manage lifecycle properly and prevent sticking on tab switches.
 
         if (!isCurrentlyWatchingReels) {
             isCurrentlyWatchingReels = true

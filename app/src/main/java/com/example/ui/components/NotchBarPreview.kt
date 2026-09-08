@@ -148,14 +148,7 @@ fun NotchBarPreview(
                 else -> "Reels"
             }
 
-            val appEmoji = when {
-                appName.contains("YouTube", ignoreCase = true) || appName.contains("Shorts", ignoreCase = true) -> "▶️"
-                appName.contains("TikTok", ignoreCase = true) -> "🎵"
-                appName.contains("Spotify", ignoreCase = true) -> "🎧"
-                appName.contains("Snapchat", ignoreCase = true) -> "👻"
-                appName.contains("Facebook", ignoreCase = true) -> "📘"
-                else -> "🔥"
-            }
+            val appEmoji = "🔥"
 
             val progressFraction = (scrollCount.toFloat() / dailyGoal.coerceAtLeast(1)).coerceIn(0f, 1f)
 

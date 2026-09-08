@@ -1,12 +1,14 @@
 package com.example.data.repository
 
+import android.content.Context
+import android.content.SharedPreferences
 import com.example.data.local.dao.ScrollyDao
 import com.example.data.local.entity.AchievementEntity
 import com.example.data.local.entity.FriendBattleEntity
 import kotlinx.coroutines.flow.Flow
 
 data class UserProfile(
-    val username: String = "aorko",
+    var username: String = "aorko",
     val streakDays: Int = 7,
     val bestStreak: Int = 11,
     val totalScrollsAllTime: Int = 14832,
@@ -29,8 +31,12 @@ data class HealthyChallenge(
 )
 
 class GamificationRepository(
-    private val dao: ScrollyDao
+    private val dao: ScrollyDao,
+    private val context: Context,
+    private val firebaseManager: FirebaseManager
 ) {
+    private val prefs: SharedPreferences = context.getSharedPreferences("scrolly_prefs", Context.MODE_PRIVATE)
+
     fun getAchievementsFlow(): Flow<List<AchievementEntity>> {
         return dao.getAllAchievementsFlow()
     }
@@ -77,12 +83,19 @@ class GamificationRepository(
     }
 
     fun getUserProfile(): UserProfile {
-        return UserProfile()
+        val savedUsername = prefs.getString("username", "aorko") ?: "aorko"
+        return UserProfile(username = savedUsername)
+    }
+
+    suspend fun updateUsername(newUsername: String) {
+        prefs.edit().putString("username", newUsername).apply()
+        firebaseManager.updateUsername(newUsername)
     }
 }
 
 class SocialRepository(
-    private val dao: ScrollyDao
+    private val dao: ScrollyDao,
+    private val firebaseManager: FirebaseManager
 ) {
     fun getBattlesFlow(): Flow<List<FriendBattleEntity>> {
         return dao.getAllBattlesFlow()
@@ -96,5 +109,13 @@ class SocialRepository(
         }
         val existing = dao.getAllBattlesFlow()
         // Simple update
+    }
+    
+    suspend fun connectFriend(friendUid: String): Boolean {
+        return firebaseManager.connectFriend(friendUid)
+    }
+    
+    suspend fun getFriends(): List<FriendData> {
+        return firebaseManager.getFriends()
     }
 }

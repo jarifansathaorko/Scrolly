@@ -10,6 +10,7 @@ import com.example.data.repository.TrackingRepository
 import com.example.tracking.accessibility.AccessibilityHelper
 import com.example.tracking.accessibility.ScrollyAccessibilityService
 import com.example.tracking.overlay.NotchFloatingBarManager
+import kotlinx.coroutines.launch
 
 class ScrollyApp : Application() {
 
@@ -33,11 +34,18 @@ class ScrollyApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        
+        val firebaseManager = com.example.data.repository.FirebaseManager(this)
+        
         database = ScrollyDatabase.getInstance(this)
         trackingRepository = TrackingRepository(database.scrollyDao())
-        gamificationRepository = GamificationRepository(database.scrollyDao())
-        socialRepository = SocialRepository(database.scrollyDao())
+        gamificationRepository = GamificationRepository(database.scrollyDao(), this, firebaseManager)
+        socialRepository = SocialRepository(database.scrollyDao(), firebaseManager)
         notchSettingsRepository = NotchSettingsRepository(this)
+        
+        kotlinx.coroutines.GlobalScope.launch {
+            firebaseManager.signInAnonymously()
+        }
     }
 
     /**

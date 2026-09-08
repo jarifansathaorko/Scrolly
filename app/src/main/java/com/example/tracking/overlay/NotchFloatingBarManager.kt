@@ -410,15 +410,7 @@ class NotchFloatingBarManager(
     }
 
     private fun updateUI(count: Int, appName: String, dailyGoal: Int, animatePulse: Boolean) {
-        val icon = when {
-            appName.contains("Instagram", ignoreCase = true) -> "📸"
-            appName.contains("YouTube", ignoreCase = true) -> "▶️"
-            appName.contains("TikTok", ignoreCase = true) -> "🎵"
-            appName.contains("Facebook", ignoreCase = true) -> "👥"
-            appName.contains("Spotify", ignoreCase = true) -> "🎧"
-            appName.contains("Snapchat", ignoreCase = true) -> "👻"
-            else -> "🔥"
-        }
+        val icon = "🔥"
         iconView?.text = icon
 
         countTextView?.text = count.toString()

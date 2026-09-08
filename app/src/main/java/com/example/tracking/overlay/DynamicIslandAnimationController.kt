@@ -45,7 +45,8 @@ class DynamicIslandAnimationController(
     // Idle collapse callback (collapses back to sleek compact pill after inactivity)
     private val idleCollapseRunnable = Runnable {
         if (currentState == IslandState.ELONGATED_ISLAND) {
-            transitionToCompactPill()
+            // Keep the main dynamic bar counter everywhere instead of collapsing
+            // transitionToCompactPill()
         }
     }
 
