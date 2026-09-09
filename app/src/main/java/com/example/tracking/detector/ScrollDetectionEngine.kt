@@ -299,6 +299,18 @@ class ScrollDetectionEngine(
             Log.d(TAG, "[REEL] pkg=$packageName  active=true  (via scroll)")
         }
 
+        // ── Instagram comment sheet guard (must run before any count) ────
+        // The comment bottom sheet keeps clips_viewer_view_pager in the tree underneath,
+        // so cachedIsReelContext stays true even when the user is reading comments.
+        // We explicitly detect the sheet here and bail out before counting.
+        if (packageName.contains("instagram")) {
+            val sourceClass = event.className?.toString()?.lowercase() ?: ""
+            if (isInstagramCommentSheetOpen(sourceClass)) {
+                Log.d(TAG, "[SCROLL] Rejected — Instagram comment sheet is open")
+                return
+            }
+        }
+
         Log.d(TAG, "[SCROLL] Reel swipe counted for $appName ($packageName)")
         onScrollDetected(packageName, appName)
     }
@@ -396,11 +408,16 @@ class ScrollDetectionEngine(
                     allText.contains("add a comment") ||
                     allText.contains("direct messages") ||
                     allText.contains("search and explore") ||
+                    // Comment sheet indicators
+                    allText.contains("comments") ||
+                    allText.contains("reply") ||
                     lowerClass.contains("directinbox") ||
                     lowerClass.contains("directthread") ||
                     lowerClass.contains("feedfragment") ||
                     lowerClass.contains("profilefragment") ||
-                    lowerClass.contains("editprofileactivity")
+                    lowerClass.contains("editprofileactivity") ||
+                    lowerClass.contains("comment") ||
+                    lowerClass.contains("bottomsheet")
                 ) {
                     return true
                 }
@@ -666,12 +683,17 @@ class ScrollDetectionEngine(
 
     /**
      * Instagram Reels detection:
-     * 1. View ID clips_viewer_view_pager (Scrolless ViewId rule).
-     * 2. Selected Reels / Clips navigation tab.
-     * 3. Top header text "Reels".
-     * 4. Rejects if Home / Feed tab is selected.
+     * 1. Fast-negative: comment bottom sheet is open — never count in this state.
+     * 2. View ID clips_viewer_view_pager (Scrolless ViewId rule).
+     * 3. Selected Reels / Clips navigation tab.
+     * 4. Top header text "Reels".
+     * 5. Rejects if Home / Feed tab is selected.
      */
     private fun isInstagramReelsActive(root: AccessibilityNodeInfo, rootBounds: Rect): Boolean {
+        // Fast-negative #1: comment sheet is open — the reel ViewPager is still
+        // underneath so clips_viewer_view_pager would give a false positive without this.
+        if (isInstagramCommentSheetOpen(root)) return false
+
         if (hasVisibleViewId(root, "com.instagram.android:id/clips_viewer_view_pager")) return true
 
         var isHomeTabSelected  = false
@@ -715,6 +737,81 @@ class ScrollDetectionEngine(
 
         if (isHomeTabSelected) return false
         return isReelsTabSelected || hasReelsHeader
+    }
+
+    /**
+     * Returns true when the Instagram comment bottom sheet is currently shown.
+     *
+     * Signals checked (most specific first for performance):
+     *  1. View IDs: `comment_bottom_sheet`, `comments_fragment`, `igds_bottom_sheet_root`,
+     *     `comments_recycler_view`, `comment_row`, `comment_text_input_field`
+     *  2. Class names containing "comment" or "bottomsheet"
+     *  3. Presence of visible text "Comments" in a top-position header
+     *
+     * The root-node overload performs a bounded BFS (max 200 nodes) for accuracy.
+     * The String overload is used in [handleScroll] where we only have the event class.
+     */
+    private fun isInstagramCommentSheetOpen(root: AccessibilityNodeInfo): Boolean {
+        // Fast ID checks first (O(1) hash lookup in framework)
+        val commentIds = listOf(
+            "com.instagram.android:id/comment_bottom_sheet",
+            "com.instagram.android:id/comments_fragment_root",
+            "com.instagram.android:id/igds_bottom_sheet_root",
+            "com.instagram.android:id/comments_recycler_view",
+            "com.instagram.android:id/comment_row_message_container",
+            "com.instagram.android:id/comment_text_input_field"
+        )
+        for (id in commentIds) {
+            if (hasVisibleViewId(root, id)) {
+                Log.d(TAG, "[INSTAGRAM] Comment sheet detected via viewId: $id")
+                return true
+            }
+        }
+
+        // BFS-based class + text check (capped at 200 nodes)
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < 200) {
+            val node = queue.removeFirst()
+            visited++
+            val clazz = node.className?.toString()?.lowercase() ?: ""
+            val text  = node.text?.toString()?.lowercase() ?: ""
+            val desc  = node.contentDescription?.toString()?.lowercase() ?: ""
+            val resId = node.viewIdResourceName?.lowercase() ?: ""
+
+            if (clazz.contains("comment") ||
+                clazz.contains("bottomsheet") ||
+                resId.contains("comment") ||
+                (text == "comments" && isNodeVisibleToTheUser(node)) ||
+                (desc == "comments" && isNodeVisibleToTheUser(node))
+            ) {
+                Log.d(TAG, "[INSTAGRAM] Comment sheet detected via BFS: class=$clazz resId=$resId")
+                return true
+            }
+
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return false
+    }
+
+    /**
+     * Lightweight string-only overload used in [handleScroll] where only the event’s
+     * source class name is available (avoids an expensive node-tree BFS on every scroll).
+     * Falls back to the full root-based check if class name is inconclusive.
+     */
+    private fun isInstagramCommentSheetOpen(sourceClass: String): Boolean {
+        if (sourceClass.contains("comment") || sourceClass.contains("bottomsheet")) return true
+        // For classes we can’t determine from name alone, inspect the live node tree
+        val serviceInstance = service ?: return false
+        val root = getActiveAppRootNode(serviceInstance) ?: return false
+        return try {
+            isInstagramCommentSheetOpen(root)
+        } finally {
+            try { root.recycle() } catch (_: Exception) {}
+        }
     }
 
     /**
