@@ -476,16 +476,11 @@ class ScrollDetectionEngine(
                     allText.contains("add a comment") ||
                     allText.contains("direct messages") ||
                     allText.contains("search and explore") ||
-                    // Comment sheet indicators
-                    allText.contains("comments") ||
-                    allText.contains("reply") ||
                     lowerClass.contains("directinbox") ||
                     lowerClass.contains("directthread") ||
                     lowerClass.contains("feedfragment") ||
                     lowerClass.contains("profilefragment") ||
-                    lowerClass.contains("editprofileactivity") ||
-                    lowerClass.contains("comment") ||
-                    lowerClass.contains("bottomsheet")
+                    lowerClass.contains("editprofileactivity")
                 ) {
                     return true
                 }
@@ -751,15 +746,16 @@ class ScrollDetectionEngine(
 
     /**
      * Instagram Reels detection:
-     * 1. Fast-negative: comment bottom sheet is open — never count in this state.
+     * 1. Fast-negative: exact comment-sheet container is visible.
      * 2. View ID clips_viewer_view_pager (Scrolless ViewId rule).
      * 3. Selected Reels / Clips navigation tab.
      * 4. Top header text "Reels".
      * 5. Rejects if Home / Feed tab is selected.
      */
     private fun isInstagramReelsActive(root: AccessibilityNodeInfo, rootBounds: Rect): Boolean {
-        // Fast-negative #1: comment sheet is open — the reel ViewPager is still
-        // underneath so clips_viewer_view_pager would give a false positive without this.
+        // The comment sheet leaves the reel ViewPager visible behind it. Only reject an
+        // exact sheet container here: generic comment controls are always present on a
+        // normal Reel and must not make the overlay disappear.
         if (isInstagramCommentSheetOpen(root)) return false
 
         if (hasVisibleViewId(root, "com.instagram.android:id/clips_viewer_view_pager")) return true
@@ -810,18 +806,15 @@ class ScrollDetectionEngine(
     /**
      * Returns true when the Instagram comment bottom sheet is currently shown.
      *
-     * Signals checked (most specific first for performance):
-     *  1. View IDs: `comment_bottom_sheet`, `comments_fragment`, `igds_bottom_sheet_root`,
-     *     `comments_recycler_view`, `comment_row`, `comment_text_input_field`
-     *  2. Class names containing "comment" or "bottomsheet"
-     *  3. Presence of visible text "Comments" in a top-position header
+     * Uses only exact, sheet-specific view IDs. Instagram's regular Reel controls have
+     * generic "comment" labels and resource IDs, so class-name, text, and substring
+     * checks here would incorrectly identify every Reel as a comment sheet.
      *
-     * The root-node overload performs a bounded BFS (max 200 nodes) for context
-     * evaluation. Scroll-event handling instead uses [isNodeInsideCommentContainer]
-     * to inspect the source node's ancestors.
+     * Scroll-event handling separately uses [isNodeInsideCommentContainer] to inspect
+     * the source node's ancestors and block comment scrolling from incrementing counts.
      */
     private fun isInstagramCommentSheetOpen(root: AccessibilityNodeInfo): Boolean {
-        // Fast ID checks first (O(1) hash lookup in framework)
+        // These IDs identify comment-sheet structure, not the normal Reel comment button.
         val commentIds = listOf(
             "com.instagram.android:id/comment_bottom_sheet",
             "com.instagram.android:id/comments_fragment_root",
@@ -834,33 +827,6 @@ class ScrollDetectionEngine(
             if (hasVisibleViewId(root, id)) {
                 Log.d(TAG, "[INSTAGRAM] Comment sheet detected via viewId: $id")
                 return true
-            }
-        }
-
-        // BFS-based class + text check (capped at 200 nodes)
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var visited = 0
-        while (queue.isNotEmpty() && visited < 200) {
-            val node = queue.removeFirst()
-            visited++
-            val clazz = node.className?.toString()?.lowercase() ?: ""
-            val text  = node.text?.toString()?.lowercase() ?: ""
-            val desc  = node.contentDescription?.toString()?.lowercase() ?: ""
-            val resId = node.viewIdResourceName?.lowercase() ?: ""
-
-            if (clazz.contains("comment") ||
-                clazz.contains("bottomsheet") ||
-                resId.contains("comment") ||
-                (text == "comments" && isNodeVisibleToTheUser(node)) ||
-                (desc == "comments" && isNodeVisibleToTheUser(node))
-            ) {
-                Log.d(TAG, "[INSTAGRAM] Comment sheet detected via BFS: class=$clazz resId=$resId")
-                return true
-            }
-
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { queue.add(it) }
             }
         }
         return false
