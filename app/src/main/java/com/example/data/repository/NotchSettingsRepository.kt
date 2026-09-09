@@ -6,6 +6,24 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+// ---------------------------------------------------------------------------
+// Notch Shape — classified from real DisplayCutout pixel geometry
+// ---------------------------------------------------------------------------
+enum class NotchShape {
+    /** Round/oval punch-hole near horizontal center of screen */
+    PUNCH_HOLE_CENTER,
+    /** Round/oval punch-hole biased toward the left edge */
+    PUNCH_HOLE_LEFT,
+    /** Round/oval punch-hole biased toward the right edge */
+    PUNCH_HOLE_RIGHT,
+    /** Wide rectangular notch spanning most of the top (classic notch) */
+    WIDE_NOTCH,
+    /** Narrow teardrop / waterdrop notch (taller than it is wide) */
+    WATER_DROP,
+    /** No hardware cutout detected */
+    NO_NOTCH
+}
+
 enum class IslandPlacementMode(
     val title: String,
     val description: String,
@@ -91,20 +109,21 @@ enum class NotchType(
 
 data class HardwareCutoutInfo(
     val hasCutout: Boolean = false,
-    val centerX: Int = 0,
-    val top: Int = 0,
-    val bottom: Int = 28,
-    val width: Int = 34,
-    val height: Int = 28,
-    val safeInsetTop: Int = 32
+    val notchShape: NotchShape = NotchShape.NO_NOTCH,
+    val centerX: Int = 0,       // horizontal offset from screen center in dp (negative = left)
+    val top: Int = 0,           // cutout top edge in dp
+    val bottom: Int = 28,       // cutout bottom edge in dp
+    val width: Int = 34,        // cutout width in dp
+    val height: Int = 28,       // cutout height in dp
+    val safeInsetTop: Int = 32  // safe top inset (below all cutouts) in dp
 )
 
 data class NotchConfiguration(
     val notchType: NotchType = NotchType.DYNAMIC_ISLAND,
     val placementMode: IslandPlacementMode = IslandPlacementMode.BELOW_NOTCH,
-    val offsetX: Int = 0, // Horizontal offset in dp (-150 to +150)
-    val offsetY: Int = 38, // Vertical offset in dp from top of physical screen (below camera cutout)
-    val cutoutGapWidth: Int = 0, // Gap width in dp (0 for sleek unified compact pill)
+    val offsetX: Int = 0,           // Horizontal offset in dp (-150 to +150)
+    val offsetY: Int = 38,          // Vertical offset in dp from top of physical screen
+    val cutoutGapWidth: Int = 0,    // Gap width in dp (0 for solid compact pill)
     val isDynamicIslandMode: Boolean = true,
     val showCutoutGuide: Boolean = false,
     val autoAdjusted: Boolean = false,
@@ -144,6 +163,12 @@ class NotchSettingsRepository(context: Context) {
         val autoAdjusted = prefs.getBoolean(KEY_AUTO_ADJUSTED, false)
 
         val hasCutout = prefs.getBoolean(KEY_HAS_CUTOUT, false)
+        val notchShapeName = prefs.getString(KEY_NOTCH_SHAPE, NotchShape.NO_NOTCH.name)
+        val notchShape = try {
+            NotchShape.valueOf(notchShapeName ?: NotchShape.NO_NOTCH.name)
+        } catch (e: Exception) {
+            NotchShape.NO_NOTCH
+        }
         val cutoutCenterX = prefs.getInt(KEY_CUTOUT_CENTER_X, 0)
         val cutoutTop = prefs.getInt(KEY_CUTOUT_TOP, 0)
         val cutoutBottom = prefs.getInt(KEY_CUTOUT_BOTTOM, 28)
@@ -162,6 +187,7 @@ class NotchSettingsRepository(context: Context) {
             autoAdjusted = autoAdjusted,
             detectedCutout = HardwareCutoutInfo(
                 hasCutout = hasCutout,
+                notchShape = notchShape,
                 centerX = cutoutCenterX,
                 top = cutoutTop,
                 bottom = cutoutBottom,
@@ -172,34 +198,101 @@ class NotchSettingsRepository(context: Context) {
         )
     }
 
+    /**
+     * Auto-calibrates the overlay position and placement mode from the detected hardware cutout.
+     *
+     * Strategy per notch shape:
+     *  - PUNCH_HOLE_CENTER  → WRAP_AROUND_NOTCH: pill Y-aligned to notch top, gap = notch width + 8dp
+     *  - PUNCH_HOLE_LEFT    → BELOW_NOTCH: horizontally shifted right to avoid camera
+     *  - PUNCH_HOLE_RIGHT   → BELOW_NOTCH: horizontally shifted left to avoid camera
+     *  - WIDE_NOTCH         → BELOW_NOTCH: placed cleanly below full safe inset
+     *  - WATER_DROP         → BELOW_NOTCH: placed below the safeInsetTop
+     *  - NO_NOTCH           → BELOW_NOTCH: placed at status bar bottom
+     */
     fun autoCalibrateWithCutout(cutout: HardwareCutoutInfo) {
-        val current = _configFlow.value
-        val detectedNotchType = when {
-            cutout.centerX < -20 -> NotchType.PUNCH_HOLE_LEFT
-            cutout.centerX > 20 -> NotchType.PUNCH_HOLE_RIGHT
-            cutout.width > 70 -> NotchType.WIDE_NOTCH
-            cutout.height > 34 -> NotchType.WATERDROP_TEARDROP
-            else -> NotchType.DYNAMIC_ISLAND
+        val detectedNotchType = when (cutout.notchShape) {
+            NotchShape.PUNCH_HOLE_LEFT -> NotchType.PUNCH_HOLE_LEFT
+            NotchShape.PUNCH_HOLE_RIGHT -> NotchType.PUNCH_HOLE_RIGHT
+            NotchShape.WIDE_NOTCH -> NotchType.WIDE_NOTCH
+            NotchShape.WATER_DROP -> NotchType.WATERDROP_TEARDROP
+            NotchShape.PUNCH_HOLE_CENTER -> NotchType.ROUND_PUNCH_HOLE_CENTER
+            NotchShape.NO_NOTCH -> NotchType.BELOW_STATUS_BAR
         }
 
-        // Calibrate position directly over / below the notch area so camera never covers count
-        val recommendedY = if (cutout.hasCutout) {
-            (cutout.bottom + 4).coerceAtLeast(38)
-        } else {
-            (cutout.safeInsetTop + 4).coerceAtLeast(38)
+        val (placementMode, offsetX, offsetY, gapWidth) = when (cutout.notchShape) {
+            NotchShape.PUNCH_HOLE_CENTER -> {
+                // True Dynamic Island: wrap around the notch, pill vertically centered on cutout
+                val gap = (cutout.width + 8).coerceAtLeast(28) // notch width + 8dp breathing room
+                val yAtNotchTop = cutout.top.coerceAtLeast(0)
+                CalibrationResult(
+                    mode = IslandPlacementMode.WRAP_AROUND_NOTCH,
+                    offsetX = cutout.centerX, // horizontal center offset from screen center
+                    offsetY = yAtNotchTop,
+                    gapWidth = gap
+                )
+            }
+
+            NotchShape.PUNCH_HOLE_LEFT -> {
+                // Float below status bar, shifted right so the pill is visible away from camera
+                val safeY = (cutout.safeInsetTop + 2).coerceAtLeast(28)
+                CalibrationResult(
+                    mode = IslandPlacementMode.BELOW_NOTCH,
+                    offsetX = 60, // shift toward center-right
+                    offsetY = safeY,
+                    gapWidth = 0
+                )
+            }
+
+            NotchShape.PUNCH_HOLE_RIGHT -> {
+                val safeY = (cutout.safeInsetTop + 2).coerceAtLeast(28)
+                CalibrationResult(
+                    mode = IslandPlacementMode.BELOW_NOTCH,
+                    offsetX = -60, // shift toward center-left
+                    offsetY = safeY,
+                    gapWidth = 0
+                )
+            }
+
+            NotchShape.WIDE_NOTCH,
+            NotchShape.WATER_DROP -> {
+                val safeY = (cutout.safeInsetTop + 4).coerceAtLeast(38)
+                CalibrationResult(
+                    mode = IslandPlacementMode.BELOW_NOTCH,
+                    offsetX = cutout.centerX,
+                    offsetY = safeY,
+                    gapWidth = 0
+                )
+            }
+
+            NotchShape.NO_NOTCH -> {
+                val safeY = (cutout.safeInsetTop + 4).coerceAtLeast(38)
+                CalibrationResult(
+                    mode = IslandPlacementMode.BELOW_NOTCH,
+                    offsetX = 0,
+                    offsetY = safeY,
+                    gapWidth = 0
+                )
+            }
         }
 
-        val updated = current.copy(
+        val updated = _configFlow.value.copy(
             detectedCutout = cutout,
             notchType = detectedNotchType,
-            placementMode = IslandPlacementMode.BELOW_NOTCH,
-            offsetX = cutout.centerX,
-            offsetY = recommendedY,
-            cutoutGapWidth = 0,
+            placementMode = placementMode,
+            offsetX = offsetX,
+            offsetY = offsetY,
+            cutoutGapWidth = gapWidth,
             autoAdjusted = true
         )
         saveConfig(updated)
     }
+
+    private data class CalibrationResult(
+        val mode: IslandPlacementMode,
+        val offsetX: Int,
+        val offsetY: Int,
+        val gapWidth: Int
+    )
 
     /**
      * Finds device hardware notch and automatically adjusts dynamic bar directly over the notch area.
@@ -296,6 +389,7 @@ class NotchSettingsRepository(context: Context) {
             .putBoolean(KEY_SHOW_GUIDE, config.showCutoutGuide)
             .putBoolean(KEY_AUTO_ADJUSTED, config.autoAdjusted)
             .putBoolean(KEY_HAS_CUTOUT, config.detectedCutout.hasCutout)
+            .putString(KEY_NOTCH_SHAPE, config.detectedCutout.notchShape.name)
             .putInt(KEY_CUTOUT_CENTER_X, config.detectedCutout.centerX)
             .putInt(KEY_CUTOUT_TOP, config.detectedCutout.top)
             .putInt(KEY_CUTOUT_BOTTOM, config.detectedCutout.bottom)
@@ -317,6 +411,7 @@ class NotchSettingsRepository(context: Context) {
         private const val KEY_SHOW_GUIDE = "key_show_guide"
         private const val KEY_AUTO_ADJUSTED = "key_auto_adjusted"
         private const val KEY_HAS_CUTOUT = "key_has_cutout"
+        private const val KEY_NOTCH_SHAPE = "key_notch_shape"
         private const val KEY_CUTOUT_CENTER_X = "key_cutout_center_x"
         private const val KEY_CUTOUT_TOP = "key_cutout_top"
         private const val KEY_CUTOUT_BOTTOM = "key_cutout_bottom"
