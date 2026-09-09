@@ -35,6 +35,8 @@ class ScrollDetectionEngine(
         private const val TAG = "ScrollDetectionEngine"
         private const val MIN_SCROLL_INTERVAL_MS = 400L
         private const val THROTTLE_EVAL_MS = 250L
+        private const val INSTAGRAM_COMMENT_SHEET_SUPPRESSION_MS = 1200L
+        private const val MAX_COMMENT_CONTAINER_ANCESTOR_DEPTH = 15
     }
 
     private val powerManager by lazy {
@@ -43,6 +45,7 @@ class ScrollDetectionEngine(
 
     private var lastScrollTimestamp: Long = 0L
     private var lastEvalTimestamp: Long = 0L
+    private var instagramCommentSheetOpenedAt: Long = 0L
 
     private var currentPackage: String? = null
     private var isCurrentlyWatchingReels: Boolean = false
@@ -175,6 +178,7 @@ class ScrollDetectionEngine(
         currentPackage = null
         lastScrollTimestamp = 0L
         lastEvalTimestamp = 0L
+        instagramCommentSheetOpenedAt = 0L
     }
 
     // ── Private helpers ───────────────────────────────────────────────────
@@ -215,6 +219,16 @@ class ScrollDetectionEngine(
             src.recycle()
             id
         } ?: ""
+
+        // Instagram emits a programmatic TYPE_VIEW_SCROLLED while its comment sheet
+        // animates in. Mark the click before any reel-navigation classification so that
+        // those animation events cannot be mistaken for reel swipes.
+        val isInstagramCommentClick = packageName.contains("instagram") &&
+                (clickedText.contains("comment") || resId.contains("comment"))
+        if (isInstagramCommentClick) {
+            instagramCommentSheetOpenedAt = System.currentTimeMillis()
+            Log.d(TAG, "[CLICK] Instagram comment sheet tap detected; suppressing scrolls briefly")
+        }
 
         // Clicked into Reels or Shorts tab
         val isReelClick = clickedText.contains("reels") ||
@@ -265,6 +279,22 @@ class ScrollDetectionEngine(
 
     private fun handleScroll(packageName: String, appName: String, event: AccessibilityEvent) {
         val now = System.currentTimeMillis()
+
+        // Reject comment-sheet events before debounce, context evaluation, or state
+        // changes. The reel pager remains in the tree behind this sheet, so those
+        // later checks alone cannot distinguish a comment RecyclerView from a reel.
+        if (packageName.contains("instagram")) {
+            if (now - instagramCommentSheetOpenedAt < INSTAGRAM_COMMENT_SHEET_SUPPRESSION_MS) {
+                Log.d(TAG, "[SCROLL] Rejected — Instagram comment sheet is animating")
+                return
+            }
+
+            if (isNodeInsideCommentContainer(event.source)) {
+                Log.d(TAG, "[SCROLL] Rejected — inside Instagram comment sheet")
+                return
+            }
+        }
+
         if (now - lastScrollTimestamp < MIN_SCROLL_INTERVAL_MS) return
 
         // Reject horizontal swiping
@@ -299,20 +329,58 @@ class ScrollDetectionEngine(
             Log.d(TAG, "[REEL] pkg=$packageName  active=true  (via scroll)")
         }
 
-        // ── Instagram comment sheet guard (must run before any count) ────
-        // The comment bottom sheet keeps clips_viewer_view_pager in the tree underneath,
-        // so cachedIsReelContext stays true even when the user is reading comments.
-        // We explicitly detect the sheet here and bail out before counting.
-        if (packageName.contains("instagram")) {
-            val sourceClass = event.className?.toString()?.lowercase() ?: ""
-            if (isInstagramCommentSheetOpen(sourceClass)) {
-                Log.d(TAG, "[SCROLL] Rejected — Instagram comment sheet is open")
-                return
-            }
-        }
-
         Log.d(TAG, "[SCROLL] Reel swipe counted for $appName ($packageName)")
         onScrollDetected(packageName, appName)
+    }
+
+    /**
+     * Returns true when a scroll event source belongs to Instagram's comment-sheet
+     * hierarchy. This walks from the source toward the root rather than searching the
+     * entire active window, which keeps the hot scroll path both fast and reliable.
+     *
+     * This method takes ownership of [sourceNode] and every parent it obtains; all are
+     * recycled before it returns.
+     */
+    private fun isNodeInsideCommentContainer(sourceNode: AccessibilityNodeInfo?): Boolean {
+        var node: AccessibilityNodeInfo? = sourceNode
+
+        try {
+            repeat(MAX_COMMENT_CONTAINER_ANCESTOR_DEPTH) {
+                val current = node ?: return false
+                val viewId = current.viewIdResourceName?.lowercase() ?: ""
+                val className = current.className?.toString()?.lowercase() ?: ""
+                val contentDescription = current.contentDescription?.toString()?.lowercase() ?: ""
+
+                val isCommentContainer = viewId.contains("comment_bottom_sheet") ||
+                        viewId.contains("comments_recycler_view") ||
+                        viewId.contains("igds_bottom_sheet_root") ||
+                        viewId.contains("comments_fragment") ||
+                        viewId.contains("comment_text_input") ||
+                        className.contains("comment") ||
+                        className.contains("bottomsheet") ||
+                        contentDescription.contains("comments")
+
+                if (isCommentContainer) return true
+
+                val parent = try {
+                    current.parent
+                } catch (_: Exception) {
+                    null
+                }
+                try {
+                    current.recycle()
+                } catch (_: Exception) {
+                }
+                node = parent
+                if (node == null) return false
+            }
+            return false
+        } finally {
+            try {
+                node?.recycle()
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private fun isStrictlyVerticalScroll(event: AccessibilityEvent): Boolean {
@@ -748,8 +816,9 @@ class ScrollDetectionEngine(
      *  2. Class names containing "comment" or "bottomsheet"
      *  3. Presence of visible text "Comments" in a top-position header
      *
-     * The root-node overload performs a bounded BFS (max 200 nodes) for accuracy.
-     * The String overload is used in [handleScroll] where we only have the event class.
+     * The root-node overload performs a bounded BFS (max 200 nodes) for context
+     * evaluation. Scroll-event handling instead uses [isNodeInsideCommentContainer]
+     * to inspect the source node's ancestors.
      */
     private fun isInstagramCommentSheetOpen(root: AccessibilityNodeInfo): Boolean {
         // Fast ID checks first (O(1) hash lookup in framework)
@@ -795,23 +864,6 @@ class ScrollDetectionEngine(
             }
         }
         return false
-    }
-
-    /**
-     * Lightweight string-only overload used in [handleScroll] where only the event’s
-     * source class name is available (avoids an expensive node-tree BFS on every scroll).
-     * Falls back to the full root-based check if class name is inconclusive.
-     */
-    private fun isInstagramCommentSheetOpen(sourceClass: String): Boolean {
-        if (sourceClass.contains("comment") || sourceClass.contains("bottomsheet")) return true
-        // For classes we can’t determine from name alone, inspect the live node tree
-        val serviceInstance = service ?: return false
-        val root = getActiveAppRootNode(serviceInstance) ?: return false
-        return try {
-            isInstagramCommentSheetOpen(root)
-        } finally {
-            try { root.recycle() } catch (_: Exception) {}
-        }
     }
 
     /**
