@@ -19,9 +19,9 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.example.ScrollyApp
+import com.example.data.repository.HardwareCutoutInfo
 import com.example.data.repository.IslandPlacementMode
 import com.example.data.repository.NotchShape
-import com.example.tracking.accessibility.AccessibilityHelper
 import com.example.tracking.detector.DisplayCutoutDetectionService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -233,6 +233,7 @@ class NotchFloatingBarManager(
     fun onDestroy() {
         statsJob?.cancel()
         configJob?.cancel()
+        scope.cancel()
         animationController?.onDestroy()
         detachWindow()
     }
@@ -355,7 +356,7 @@ class NotchFloatingBarManager(
         shape: NotchShape,
         offsetXDp: Int,
         offsetYDp: Int,
-        cutout: com.example.data.repository.HardwareCutoutInfo
+        cutout: HardwareCutoutInfo
     ): Pair<Int, Int> {
         val density = context.resources.displayMetrics.density
 
@@ -390,11 +391,16 @@ class NotchFloatingBarManager(
         rootView = root
 
         // Re-query cutout whenever the window attaches (catches first-time calibration)
+        // OnWindowAttachListener is API 18+; rootWindowInsets is API 23+; displayCutout is API 28+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             root.viewTreeObserver.addOnWindowAttachListener(object : ViewTreeObserver.OnWindowAttachListener {
                 override fun onWindowAttached() {
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
                     val insets = root.rootWindowInsets ?: return
-                    val cutout = insets.displayCutout ?: return
+                    val cutout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        insets.displayCutout
+                    } else null
+                    cutout ?: return
                     val detected = DisplayCutoutDetectionService.parseDisplayCutout(cutout, ctx)
                     val repo     = ScrollyApp.instance.notchSettingsRepository
                     if (!repo.configFlow.value.autoAdjusted) {
@@ -524,7 +530,7 @@ class NotchFloatingBarManager(
         iconView?.text      = "🔥"
         countTextView?.text = count.toString()
 
-        val isNearLimit  = count >= (dailyGoal * 0.8f)
+        val isNearLimit  = count >= (dailyGoal * 0.8f).toInt()
         val isOverLimit  = count >= dailyGoal
 
         val dotColor = when {

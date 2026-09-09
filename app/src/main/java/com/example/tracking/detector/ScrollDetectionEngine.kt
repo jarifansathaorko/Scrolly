@@ -9,6 +9,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import kotlin.math.abs
 
 /**
  * ScrollDetectionEngine
@@ -188,10 +189,18 @@ class ScrollDetectionEngine(
     private fun scheduleEvaluation(activePkg: String, appName: String) {
         pendingEvalRunnable?.let { handler.removeCallbacks(it) }
         pendingEvalRunnable = Runnable {
-            val dummyEvent = AccessibilityEvent.obtain()
-            dummyEvent.className = ""
-            evaluateScreenContext(activePkg, appName, dummyEvent, force = true)
-            dummyEvent.recycle()
+            // Re-evaluate reel context using the live node tree — no dummy AccessibilityEvent needed
+            val isReel = checkNodeTreeStrictlyForReels(activePkg)
+            if (isReel != isCurrentlyWatchingReels) {
+                if (isReel) {
+                    isCurrentlyWatchingReels = true
+                    cachedIsReelContext = true
+                    onReelVisibilityChanged?.invoke(activePkg, appName, true)
+                    Log.d(TAG, "[REEL] pkg=$activePkg  active=true  (via scheduled eval)")
+                } else {
+                    setReelInactive(activePkg, appName)
+                }
+            }
         }
         handler.postDelayed(pendingEvalRunnable!!, 300L)
     }
@@ -200,7 +209,12 @@ class ScrollDetectionEngine(
         val textList    = event.text.map { it.toString().lowercase() }
         val contentDesc = event.contentDescription?.toString()?.lowercase() ?: ""
         val clickedText = (textList + listOf(contentDesc)).joinToString(" ")
-        val resId       = (event.source?.viewIdResourceName ?: "").lowercase()
+        // Read and immediately recycle the source node to prevent AccessibilityNodeInfo leaks
+        val resId = event.source?.let { src ->
+            val id = src.viewIdResourceName?.lowercase() ?: ""
+            src.recycle()
+            id
+        } ?: ""
 
         // Clicked into Reels or Shorts tab
         val isReelClick = clickedText.contains("reels") ||
@@ -296,7 +310,7 @@ class ScrollDetectionEngine(
 
             if (deltaX != -1 && deltaY != -1) {
                 if (deltaX != 0 && deltaY == 0) return false
-                if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 2) return false
+                if (abs(deltaX) > abs(deltaY) && abs(deltaX) > 2) return false
                 if (deltaY > 0) return true
                 if (deltaY < 0) return false
             }
