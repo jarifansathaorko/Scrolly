@@ -523,18 +523,6 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // --- NOTCH BAR PREVIEW CARD ---
-            if (isNotchPreviewVisible) {
-                NotchBarPreview(
-                    scrollCount = totalScrolls,
-                    dailyGoal = dailyLimit,
-                    appName = "Instagram",
-                    config = notchConfig,
-                    onDismiss = { viewModel.setNotchBarPreviewVisible(false) }
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
             // --- HARDWARE NOTCH CUSTOMIZER ---
             NotchDynamicIslandCustomizer(
                 config = notchConfig,

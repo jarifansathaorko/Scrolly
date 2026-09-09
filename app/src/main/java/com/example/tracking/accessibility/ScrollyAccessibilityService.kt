@@ -7,7 +7,6 @@ import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import com.example.ScrollyApp
-import com.example.tracking.detector.AppRecognitionEngine
 import com.example.tracking.detector.ScrollDetectionEngine
 import com.example.tracking.overlay.NotchFloatingBarManager
 import kotlinx.coroutines.CoroutineScope
@@ -30,9 +29,8 @@ class ScrollyAccessibilityService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mainHandler = Handler(Looper.getMainLooper())
-    private lateinit var scrollDetectionEngine: ScrollDetectionEngine
     private var notchFloatingBarManager: NotchFloatingBarManager? = null
-    private var currentForegroundPackage: String? = null
+    private var scrollDetectionEngine: ScrollDetectionEngine? = null
 
     fun getFloatingBarManager(): NotchFloatingBarManager? = notchFloatingBarManager
 
@@ -49,31 +47,17 @@ class ScrollyAccessibilityService : AccessibilityService() {
 
         scrollDetectionEngine = ScrollDetectionEngine(
             service = this,
-            onScrollDetected = { packageName, appName ->
-                // Immediately increment count with pulse animation on UI thread
-                val optimisticCount = ScrollyApp.instance.trackingRepository.todayTotalScrolls.value + 1
-                mainHandler.post {
-                    notchFloatingBarManager?.updateCount(optimisticCount, appName)
-                }
-
-                // Persist scroll event to Room database
-                serviceScope.launch {
-                    try {
-                        ScrollyApp.instance.trackingRepository.recordScroll(packageName, appName, 1)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error recording scroll event", e)
-                    }
-                }
+            onScrollDetected = { pkg, appName ->
+                incrementCount(pkg, appName)
             },
-            onReelVisibilityChanged = { packageName, appName, isWatchingReels ->
+            onReelVisibilityChanged = { pkg, appName, isWatchingReels ->
                 mainHandler.post {
-                    val isStillInSocialApp = AppRecognitionEngine.isSupported(currentForegroundPackage)
                     if (isWatchingReels) {
                         val count = ScrollyApp.instance.trackingRepository.todayTotalScrolls.value
+                        notchFloatingBarManager?.attachWindowIfNeeded()
                         notchFloatingBarManager?.show(appName, count)
                     } else {
-                        // Maintain constant window-attach state while in supported social app to prevent flicker
-                        notchFloatingBarManager?.hide(immediate = false, keepAttached = isStillInSocialApp)
+                        notchFloatingBarManager?.hide(immediate = true, keepAttached = false)
                     }
                 }
             }
@@ -83,14 +67,17 @@ class ScrollyAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         try {
-            val info = serviceInfo ?: AccessibilityServiceInfo()
-            info.eventTypes = AccessibilityEvent.TYPES_ALL_MASK
-            info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            info.flags = info.flags or
-                    AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-                    AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-                    AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
-            info.notificationTimeout = 40
+            val info = AccessibilityServiceInfo().apply {
+                eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                        AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+                        AccessibilityEvent.TYPE_WINDOWS_CHANGED or
+                        AccessibilityEvent.TYPE_VIEW_SCROLLED or
+                        AccessibilityEvent.TYPE_VIEW_CLICKED
+                feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+                flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
+                        AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+                notificationTimeout = 100
+            }
             this.serviceInfo = info
         } catch (e: Exception) {
             Log.w(TAG, "Could not configure serviceInfo", e)
@@ -100,20 +87,20 @@ class ScrollyAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-        val pkg = event.packageName?.toString()
+        scrollDetectionEngine?.processAccessibilityEvent(event)
+    }
 
-        if (pkg != null && pkg != packageName && pkg != "com.example") {
-            currentForegroundPackage = pkg
-
-            // CRITICAL: Maintain constant window-attach state when detecting social media package names.
-            // This pins the top-most overlay layer to the status bar area regardless of system UI shifts.
-            if (AppRecognitionEngine.isSupported(pkg)) {
-                notchFloatingBarManager?.attachWindowIfNeeded()
-            }
+    private fun incrementCount(pkg: String, appName: String) {
+        val optimisticCount = ScrollyApp.instance.trackingRepository.todayTotalScrolls.value + 1
+        mainHandler.post {
+            notchFloatingBarManager?.updateCount(optimisticCount, appName)
         }
-
-        if (::scrollDetectionEngine.isInitialized) {
-            scrollDetectionEngine.processAccessibilityEvent(event)
+        serviceScope.launch {
+            try {
+                ScrollyApp.instance.trackingRepository.recordScroll(pkg, appName, 1)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error recording scroll event", e)
+            }
         }
     }
 
@@ -127,5 +114,6 @@ class ScrollyAccessibilityService : AccessibilityService() {
         activeServiceInstance = null
         notchFloatingBarManager?.onDestroy()
         notchFloatingBarManager = null
+        scrollDetectionEngine = null
     }
 }

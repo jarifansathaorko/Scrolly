@@ -129,6 +129,8 @@ class NotchFloatingBarManager(
                 pillContainer?.visibility = View.VISIBLE
                 pillContainer?.alpha = 1f
                 animationController?.enforceStaticCompactPill()
+                val config = ScrollyApp.instance.notchSettingsRepository.configFlow.value
+                applyConfigUpdate(config.offsetX, config.offsetY, config.cutoutGapWidth)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to attach overlay window", e)
@@ -151,6 +153,8 @@ class NotchFloatingBarManager(
             pillContainer?.visibility = View.VISIBLE
             pillContainer?.alpha = 1f
             animationController?.enforceStaticCompactPill()
+            val config = ScrollyApp.instance.notchSettingsRepository.configFlow.value
+            applyConfigUpdate(config.offsetX, config.offsetY, config.cutoutGapWidth)
         }
 
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -312,8 +316,8 @@ class NotchFloatingBarManager(
             }
             background = shape
             elevation = dpToPx(12).toFloat()
-            visibility = View.VISIBLE
-            alpha = 1f
+            visibility = View.GONE
+            alpha = 0f
         }
         pillContainer = pill
 
@@ -436,12 +440,12 @@ class NotchFloatingBarManager(
     private fun applyConfigUpdate(offsetX: Int, offsetY: Int, cutoutGapWidth: Int) {
         val config = ScrollyApp.instance.notchSettingsRepository.configFlow.value
 
-        // Center spacer gap is kept collapsed (0 width, GONE) to enforce compact pill
+        // Center spacer gap is used when wrapping around the notch
         centerSpacerView?.let { spacer ->
             val lp = spacer.layoutParams
-            lp.width = 0
+            lp.width = if (config.placementMode == IslandPlacementMode.WRAP_AROUND_NOTCH) dpToPx(cutoutGapWidth) else 0
             spacer.layoutParams = lp
-            spacer.visibility = View.GONE
+            spacer.visibility = if (lp.width > 0) View.VISIBLE else View.GONE
         }
 
         // Reposition overlay on WindowManager safely below punch hole

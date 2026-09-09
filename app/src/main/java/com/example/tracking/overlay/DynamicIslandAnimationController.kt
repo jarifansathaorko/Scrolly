@@ -34,7 +34,7 @@ class DynamicIslandAnimationController(
      * Enforces the solid, sleek compact pill shape without expanding across the screen.
      */
     fun enforceStaticCompactPill() {
-        centerSpacerView.visibility = View.GONE
+        // Do not force centerSpacerView to GONE, let NotchFloatingBarManager applyConfigUpdate manage its width and visibility
         compactIconView.visibility = View.GONE
 
         leftWingView.visibility = View.VISIBLE

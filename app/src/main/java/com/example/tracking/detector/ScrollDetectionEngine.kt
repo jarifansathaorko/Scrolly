@@ -1,20 +1,25 @@
 package com.example.tracking.detector
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Context
+import android.graphics.Rect
 import android.os.Build
+import android.os.PowerManager
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 
 /**
  * ScrollDetectionEngine
  * Highly precise, battery-optimized reel and short-form video swipe detection engine.
- * - Strictly rejects horizontal swiping (left-right carousels, photo galleries, stories, tab switches).
- * - Distinguishes regular social media feeds (e.g. Facebook Newsfeed, Instagram Home, YouTube Home)
- *   from dedicated Reels / Shorts / TikTok / Spotify video tabs.
- * - Ultra-low battery consumption: Uses intelligent screen context caching and rate limits node hierarchy inspections
- *   to avoid CPU wake-locks and battery drain.
- * - Debounces swipe intervals to prevent double counts from fling decelerations.
+ * Powered by node anchoring and heuristic rules from the Scrolless architecture:
+ * - Accurately detects when the user enters or leaves the dedicated Reels / Shorts / TikTok tabs.
+ * - For Facebook: Checks composer specs, selected Reels/Video tab, "Reels" header, and full-screen SurfaceView recycler hierarchy.
+ *   Strictly rejects Facebook News Feed ("What's on your mind?", Home tab, Friends tab).
+ * - For Instagram: Checks clips_viewer_view_pager and selected Reels navigation tab.
+ *   Strictly rejects Instagram Home/Feed tab.
+ * - Accurately counts vertical swipes with debounce and rejects horizontal carousels/stories.
  */
 class ScrollDetectionEngine(
     private val service: AccessibilityService? = null,
@@ -23,18 +28,30 @@ class ScrollDetectionEngine(
 ) {
     companion object {
         private const val TAG = "ScrollDetectionEngine"
-        private const val MIN_SCROLL_INTERVAL_MS = 350L
-        private const val CONTENT_CHANGE_EVAL_THROTTLE_MS = 1200L
-        private const val CACHE_EXPIRY_MS = 3000L
+        private const val MIN_SCROLL_INTERVAL_MS = 400L
+        private const val THROTTLE_EVAL_MS = 250L
     }
 
-    private var lastScrollTimestamp: Long = 0
-    private var lastContentChangeEvalTimestamp: Long = 0
-    private var lastFullEvalTimestamp: Long = 0
+    private val powerManager by lazy {
+        service?.getSystemService(Context.POWER_SERVICE) as? PowerManager
+    }
+
+    private var lastScrollTimestamp: Long = 0L
+    private var lastEvalTimestamp: Long = 0L
 
     private var currentPackage: String? = null
     private var isCurrentlyWatchingReels: Boolean = false
     private var cachedIsReelContext: Boolean = false
+
+    private data class DetectionNode(
+        val nodeId: Int,
+        val parentNodeId: Int? = null,
+        val className: String? = null,
+        val screenWidthFraction: Float = 0f,
+        val screenHeightFraction: Float = 0f,
+        val isScrollable: Boolean = false,
+        val isLongClickable: Boolean = false
+    )
 
     private fun isIgnoredSystemPackage(packageName: String): Boolean {
         if (packageName == service?.packageName) return true
@@ -48,83 +65,121 @@ class ScrollDetectionEngine(
         return false
     }
 
-    fun processAccessibilityEvent(event: AccessibilityEvent) {
-        val packageName = event.packageName?.toString() ?: return
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var pendingEvalRunnable: Runnable? = null
 
-        // 1. Filter out ignored packages immediately (0 CPU cost)
-        if (isIgnoredSystemPackage(packageName)) {
+    fun processAccessibilityEvent(event: AccessibilityEvent) {
+        // Screen off check
+        powerManager?.let { pm ->
+            if (!pm.isInteractive) {
+                if (isCurrentlyWatchingReels) {
+                    isCurrentlyWatchingReels = false
+                    cachedIsReelContext = false
+                    onReelVisibilityChanged?.invoke(currentPackage ?: "", "", false)
+                }
+                return
+            }
+        }
+
+        val eventPkg = event.packageName?.toString() ?: return
+
+        // Filter system/keyboard packages from polluting the evaluation if they sneak through
+        if (isIgnoredSystemPackage(eventPkg)) {
             return
         }
 
-        val isSupported = AppRecognitionEngine.isSupported(packageName)
+        val isEventPkgSupported = AppRecognitionEngine.isSupported(eventPkg)
 
-        // 2. Window / screen switch (Major lifecycle event)
+        // Window / App switch: reliably tells us the foreground app changed
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            if (!isSupported) {
-                if (isCurrentlyWatchingReels || currentPackage != packageName) {
-                    currentPackage = packageName
+            if (!isEventPkgSupported) {
+                if (isCurrentlyWatchingReels || currentPackage != eventPkg) {
+                    currentPackage = eventPkg
                     isCurrentlyWatchingReels = false
                     cachedIsReelContext = false
-                    onReelVisibilityChanged?.invoke(packageName, "", false)
+                    onReelVisibilityChanged?.invoke(eventPkg, "", false)
                 }
                 return
             }
 
-            val appName = AppRecognitionEngine.getAppName(packageName)
-            currentPackage = packageName
-            // Force evaluate new window
-            evaluateScreenContext(packageName, appName, event, force = true)
+            val appName = AppRecognitionEngine.getAppName(eventPkg)
+            currentPackage = eventPkg
+            evaluateScreenContext(eventPkg, appName, event, force = true)
             return
         }
 
-        if (!isSupported) {
+        // For other events (scroll, click, content change), we only care if they belong to a supported app
+        if (!isEventPkgSupported) {
+            // But if we are currently watching reels, and we get a huge influx of unsupported events,
+            // we probably switched apps without a TYPE_WINDOW_STATE_CHANGED. 
+            // We'll rely on TYPE_WINDOW_STATE_CHANGED for instant hiding, but just return here.
             return
         }
 
-        val appName = AppRecognitionEngine.getAppName(packageName)
+        val appName = AppRecognitionEngine.getAppName(eventPkg)
+        currentPackage = eventPkg // Keep track that we are still in this app
 
-        // 3. Tab or Button clicks (Instant detection when user taps Reels or Shorts tab!)
+        // Instant click detection
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
-            handleViewClicked(packageName, appName, event)
+            handleViewClicked(eventPkg, appName, event)
+            scheduleEvaluation(eventPkg, appName)
             return
         }
 
-        // 4. Scroll event processing (Strictly vertical & debounced)
+        // Scroll event
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
-            handleScroll(packageName, appName, event)
+            handleScroll(eventPkg, appName, event)
             return
         }
 
-        // 5. Tab / Pane transitions (Rate-limited to prevent battery drain from frequent updates)
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+        // Content updates
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED || 
+            event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
             val now = System.currentTimeMillis()
-            if (now - lastContentChangeEvalTimestamp < CONTENT_CHANGE_EVAL_THROTTLE_MS) {
-                return // Throttle high-frequency UI updates to save battery
-            }
-            lastContentChangeEvalTimestamp = now
-
-            val contentChange = event.contentChangeTypes
-            if (contentChange and AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_APPEARED != 0 ||
-                contentChange and AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_DISAPPEARED != 0 ||
-                contentChange and AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE != 0
-            ) {
-                evaluateScreenContext(packageName, appName, event, force = false)
+            if (now - lastEvalTimestamp >= THROTTLE_EVAL_MS) {
+                evaluateScreenContext(eventPkg, appName, event, force = false)
+            } else {
+                scheduleEvaluation(eventPkg, appName)
             }
         }
     }
 
-    /**
-     * Scrolless-inspired click detection:
-     * Immediately catches user tapping "Reels" / "Shorts" navigation items to show the bar with 0 delay.
-     * Also detects when user leaves Reels (taps Home, Search, Profile, Back, etc.) to hide the bar immediately.
-     */
+    private fun scheduleEvaluation(activePkg: String, appName: String) {
+        pendingEvalRunnable?.let { handler.removeCallbacks(it) }
+        pendingEvalRunnable = Runnable {
+            // We pass a dummy event, evaluateScreenContext relies mostly on root node anyways
+            val dummyEvent = AccessibilityEvent.obtain()
+            dummyEvent.className = ""
+            evaluateScreenContext(activePkg, appName, dummyEvent, force = true)
+            dummyEvent.recycle()
+        }
+        handler.postDelayed(pendingEvalRunnable!!, 300L)
+    }
+
+    private fun resolveActiveAppPackage(fallbackPkg: String): String {
+        if (service != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                val windows = service.windows
+                if (!windows.isNullOrEmpty()) {
+                    val appWindows = windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+                    val foreground = appWindows.firstOrNull { it.isFocused } ?: appWindows.firstOrNull { it.isActive }
+                    val pkg = foreground?.root?.packageName?.toString()
+                    if (!pkg.isNullOrEmpty()) {
+                        return pkg
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        return fallbackPkg
+    }
+
     private fun handleViewClicked(packageName: String, appName: String, event: AccessibilityEvent) {
         val textList = event.text.map { it.toString().lowercase() }
         val contentDesc = event.contentDescription?.toString()?.lowercase() ?: ""
         val clickedText = (textList + listOf(contentDesc)).joinToString(" ")
         val resId = (event.source?.viewIdResourceName ?: "").lowercase()
 
-        // 1. User clicked into Reels or Shorts
+        // Clicked into Reels or Shorts
         val isReelClick = clickedText.contains("reels") ||
                 clickedText.contains("shorts") ||
                 clickedText.contains("spotlight") ||
@@ -141,10 +196,11 @@ class ScrollDetectionEngine(
             return
         }
 
-        // 2. User clicked out of Reels (Home feed, Search/Explore grid, Profile, Messages, Back)
+        // Clicked out of Reels (Home, Search, Profile, Friends, Back)
         val isExitClick = clickedText.contains("home") ||
                 clickedText.contains("search") ||
                 clickedText.contains("explore") ||
+                clickedText.contains("friends") ||
                 clickedText.contains("notifications") ||
                 clickedText.contains("profile") ||
                 clickedText.contains("direct") ||
@@ -157,7 +213,6 @@ class ScrollDetectionEngine(
                 resId.contains("home_tab") ||
                 resId.contains("search_tab") ||
                 resId.contains("profile_tab") ||
-                resId.contains("direct_tab") ||
                 resId.contains("action_bar_button_back")
 
         if (isExitClick) {
@@ -169,38 +224,63 @@ class ScrollDetectionEngine(
         }
     }
 
-    /**
-     * Checks if the event is strictly a vertical swipe.
-     * Rejects horizontal swipes (left-right swiping across stories, carousels, tabs, cards).
-     */
+    private fun handleScroll(packageName: String, appName: String, event: AccessibilityEvent) {
+        val now = System.currentTimeMillis()
+        if (now - lastScrollTimestamp < MIN_SCROLL_INTERVAL_MS) {
+            return
+        }
+
+        // Reject horizontal swiping
+        if (!isStrictlyVerticalScroll(event)) {
+            Log.d(TAG, "Rejected horizontal scroll on $packageName")
+            return
+        }
+
+        // Quick check against negative screens
+        val className = event.className?.toString() ?: ""
+        if (isUnambiguousNegativeScreen(packageName, className, event)) {
+            cachedIsReelContext = false
+            if (isCurrentlyWatchingReels) {
+                isCurrentlyWatchingReels = false
+                onReelVisibilityChanged?.invoke(packageName, appName, false)
+            }
+            return
+        }
+
+        // Confirm reel context
+        val isReel = if (isTikTok(packageName)) {
+            !isUnambiguousNegativeScreen(packageName, className, event)
+        } else {
+            cachedIsReelContext || isPositiveReelScreen(packageName, className, event)
+        }
+
+        if (!isReel) {
+            return
+        }
+
+        lastScrollTimestamp = now
+        if (!isCurrentlyWatchingReels) {
+            isCurrentlyWatchingReels = true
+            onReelVisibilityChanged?.invoke(packageName, appName, true)
+        }
+
+        Log.d(TAG, "Reel scroll registered for $appName ($packageName)")
+        onScrollDetected(packageName, appName)
+    }
+
     private fun isStrictlyVerticalScroll(event: AccessibilityEvent): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val deltaX = event.scrollDeltaX
             val deltaY = event.scrollDeltaY
 
-            // In Android, -1 indicates SCROLL_DELTA_UNDEFINED. Only evaluate when coordinates are actually reported.
             if (deltaX != -1 && deltaY != -1) {
-                // If horizontal movement occurred without vertical movement -> Left/Right swipe
-                if (deltaX != 0 && deltaY == 0) {
-                    return false
-                }
-
-                // If horizontal movement exceeds vertical movement -> horizontal swipe
-                if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 2) {
-                    return false
-                }
-
-                // If vertical delta is reported and positive (downward scroll to next reel)
-                if (deltaY > 0) {
-                    return true
-                } else if (deltaY < 0) {
-                    // Upward scroll, ignore
-                    return false
-                }
+                if (deltaX != 0 && deltaY == 0) return false
+                if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 2) return false
+                if (deltaY > 0) return true
+                if (deltaY < 0) return false
             }
         }
 
-        // Fallback checks for ViewPager or RecyclerView scroll direction
         val className = event.className?.toString()?.lowercase() ?: ""
         if (className.contains("horizontal") ||
             className.contains("tablayout") ||
@@ -221,11 +301,7 @@ class ScrollDetectionEngine(
         force: Boolean
     ) {
         val now = System.currentTimeMillis()
-        if (!force && now - lastFullEvalTimestamp < CACHE_EXPIRY_MS) {
-            // Use cached state to preserve device battery
-            return
-        }
-        lastFullEvalTimestamp = now
+        lastEvalTimestamp = now
 
         val className = event.className?.toString() ?: ""
 
@@ -239,7 +315,7 @@ class ScrollDetectionEngine(
             return
         }
 
-        // 2. Strict Positive Check: Dedicated Reels / Shorts / TikTok / Spotify video tab
+        // 2. Strict Positive Check
         val isReel = isPositiveReelScreen(packageName, className, event)
         cachedIsReelContext = isReel
 
@@ -249,7 +325,6 @@ class ScrollDetectionEngine(
                 onReelVisibilityChanged?.invoke(packageName, appName, true)
             }
         } else {
-            // When in supported app but not confirmed reel tab (e.g. browsing main feed)
             if (isCurrentlyWatchingReels) {
                 isCurrentlyWatchingReels = false
                 onReelVisibilityChanged?.invoke(packageName, appName, false)
@@ -257,22 +332,19 @@ class ScrollDetectionEngine(
         }
     }
 
-    /**
-     * Returns true if user is on a standard feed, profile, chat, or non-video tab.
-     */
     private fun isUnambiguousNegativeScreen(packageName: String, className: String, event: AccessibilityEvent): Boolean {
         val lowerClass = className.lowercase()
         val textList = event.text.map { it.toString().lowercase() }
         val allText = (textList + listOfNotNull(event.contentDescription?.toString()?.lowercase())).joinToString(" ")
 
         when {
-            // FACEBOOK: Main Newsfeed, Stories, Groups, Marketplace, Menu
             packageName.contains("facebook") -> {
                 if (allText.contains("what's on your mind") ||
                     allText.contains("write a comment") ||
                     allText.contains("news feed") ||
                     allText.contains("marketplace") ||
                     allText.contains("groups") ||
+                    allText.contains("friends, tab") ||
                     allText.contains("notifications") ||
                     allText.contains("menu") ||
                     lowerClass.contains("newsfeed") ||
@@ -285,7 +357,6 @@ class ScrollDetectionEngine(
                 }
             }
 
-            // INSTAGRAM: Home Feed, DMs, Profile, Settings
             packageName.contains("instagram") -> {
                 if (allText.contains("your story") ||
                     allText.contains("add a comment") ||
@@ -301,7 +372,6 @@ class ScrollDetectionEngine(
                 }
             }
 
-            // YOUTUBE: Home Feed, Subscriptions, Library, Search
             packageName.contains("youtube") -> {
                 if ((allText.contains("home") && allText.contains("subscriptions") && !allText.contains("shorts")) ||
                     lowerClass.contains("homefragment") ||
@@ -313,7 +383,6 @@ class ScrollDetectionEngine(
                 }
             }
 
-            // TIKTOK: Profile, Inbox, Search grid
             isTikTok(packageName) -> {
                 if (lowerClass.contains("chatroom") ||
                     lowerClass.contains("imactivity") ||
@@ -326,7 +395,6 @@ class ScrollDetectionEngine(
                 }
             }
 
-            // SPOTIFY: Track lists, Playlists, Albums, Search, Your Library
             packageName.contains("spotify") -> {
                 if (allText.contains("your library") ||
                     allText.contains("playlists") ||
@@ -344,63 +412,30 @@ class ScrollDetectionEngine(
         return false
     }
 
-    /**
-     * Returns true ONLY if user is confirmed to be inside the dedicated Reels/Shorts/TikTok/Spotify Video tab.
-     */
     private fun isPositiveReelScreen(packageName: String, className: String, event: AccessibilityEvent): Boolean {
         val lowerClass = className.lowercase()
         val textList = event.text.map { it.toString().lowercase() }
         val allText = (textList + listOfNotNull(event.contentDescription?.toString()?.lowercase())).joinToString(" ")
 
         return when {
-            // FACEBOOK: Dedicated Reels viewer or Reels tab
             packageName.contains("facebook") -> {
-                lowerClass.contains("reels") ||
-                        lowerClass.contains("shorts") ||
-                        allText.contains("original audio") ||
-                        allText.contains("remix this reel") ||
-                        allText.contains("use this audio") ||
-                        checkNodeTreeStrictlyForReels(packageName)
+                checkNodeTreeStrictlyForReels(packageName)
             }
 
-            // INSTAGRAM: Dedicated Reels tab or Clips viewer
             packageName.contains("instagram") -> {
-                lowerClass.contains("clips") ||
-                        lowerClass.contains("reel") ||
-                        allText.contains("original audio") ||
-                        allText.contains("remix") ||
-                        allText.contains("use template") ||
-                        checkNodeTreeStrictlyForReels(packageName)
+                checkNodeTreeStrictlyForReels(packageName)
             }
 
-            // YOUTUBE: Shorts tab or Shorts player
             packageName.contains("youtube") -> {
-                lowerClass.contains("shorts") ||
-                        lowerClass.contains("reel") ||
-                        (allText.contains("remix") && allText.contains("sound")) ||
-                        allText.contains("shorts") ||
-                        checkNodeTreeStrictlyForReels(packageName)
+                checkNodeTreeStrictlyForReels(packageName)
             }
 
-            // TIKTOK: Full-screen video feed (default for TikTok main page)
             isTikTok(packageName) -> {
-                lowerClass.contains("mainpagefragment") ||
-                        lowerClass.contains("feedfragment") ||
-                        lowerClass.contains("verticalviewpager") ||
-                        lowerClass.contains("aweme") ||
-                        allText.contains("for you") ||
-                        allText.contains("following") ||
-                        !isUnambiguousNegativeScreen(packageName, className, event)
+                checkNodeTreeStrictlyForReels(packageName)
             }
 
-            // SPOTIFY: Canvas / Discovery vertical video feed / Clips player
             packageName.contains("spotify") -> {
-                lowerClass.contains("verticalfeed") ||
-                        lowerClass.contains("canvas") ||
-                        lowerClass.contains("clips") ||
-                        allText.contains("preview") ||
-                        allText.contains("clips") ||
-                        checkNodeTreeStrictlyForReels(packageName)
+                checkNodeTreeStrictlyForReels(packageName)
             }
 
             else -> false
@@ -412,138 +447,316 @@ class ScrollDetectionEngine(
     }
 
     /**
-     * Inspects active accessibility node hierarchy strictly for dedicated Reels/Shorts/Clips viewers.
-     * Limits traversal depth to 15 nodes and recycles nodes immediately to prevent battery drain.
+     * Inspects active accessibility node hierarchy using the Scrolless detection model.
      */
-    private fun checkNodeTreeStrictlyForReels(packageName: String): Boolean {
+    fun checkNodeTreeStrictlyForReels(packageName: String): Boolean {
         val serviceInstance = service ?: return false
-        val root = try {
-            serviceInstance.rootInActiveWindow
-        } catch (_: Exception) {
-            null
-        } ?: return false
+        val root = getActiveAppRootNode(serviceInstance) ?: return false
 
         return try {
+            val rootBounds = Rect().also(root::getBoundsInScreen)
             when {
-                packageName.contains("facebook") -> {
-                    // Reject if News Feed items are in tree
-                    if (root.findAccessibilityNodeInfosByText("What's on your mind?").isNotEmpty()) {
-                        return false
-                    }
-                    findNodeByViewId(root, "reels") != null ||
-                            findNodeByViewId(root, "shorts") != null ||
-                            root.findAccessibilityNodeInfosByText("Original audio").isNotEmpty() ||
-                            root.findAccessibilityNodeInfosByText("Remix this reel").isNotEmpty()
+                packageName.contains("facebook.katana") -> {
+                    isFacebookKatanaReelsActive(root, rootBounds)
+                }
+
+                packageName.contains("facebook.lite") -> {
+                    hasVisibleViewId(root, "com.facebook.lite:id/video_view")
                 }
 
                 packageName.contains("instagram") -> {
-                    findNodeByViewId(root, "clips") != null ||
-                            findSelectedReelsTab(root) ||
-                            root.findAccessibilityNodeInfosByText("Remix").isNotEmpty()
+                    isInstagramReelsActive(root, rootBounds)
                 }
 
                 packageName.contains("youtube") -> {
-                    findNodeByViewId(root, "reel") != null ||
-                            findNodeByViewId(root, "shorts") != null ||
-                            findSelectedShortsTab(root)
+                    isYouTubeShortsActive(root, packageName)
                 }
 
-                packageName.contains("spotify") -> {
-                    findNodeByViewId(root, "canvas") != null ||
-                            findNodeByViewId(root, "vertical") != null ||
-                            findNodeByViewId(root, "clips") != null
+                isTikTok(packageName) -> {
+                    isTikTokActive(root, packageName)
+                }
+
+                packageName.contains("snapchat") -> {
+                    hasVisibleViewId(root, "com.snapchat.android:id/spotlight_container")
                 }
 
                 else -> false
             }
         } catch (e: Exception) {
+            Log.w(TAG, "Error checking node tree for $packageName", e)
             false
         } finally {
             try { root.recycle() } catch (_: Exception) {}
         }
     }
 
-    private fun findSelectedReelsTab(root: AccessibilityNodeInfo): Boolean {
-        val reelTabs = root.findAccessibilityNodeInfosByText("Reels")
-        for (node in reelTabs) {
-            if (node.isSelected) return true
+    private fun getActiveAppRootNode(service: AccessibilityService): AccessibilityNodeInfo? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                val windows = service.windows
+                if (!windows.isNullOrEmpty()) {
+                    val appWindows = windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+                    val foreground = appWindows.firstOrNull { it.isFocused } ?: appWindows.firstOrNull { it.isActive }
+                    val root = foreground?.root
+                    if (root != null) return root
+                }
+            } catch (_: Exception) {}
         }
-        return false
+        return try { service.rootInActiveWindow } catch (_: Exception) { null }
     }
 
-    private fun findSelectedShortsTab(root: AccessibilityNodeInfo): Boolean {
-        val shortsTabs = root.findAccessibilityNodeInfosByText("Shorts")
-        for (node in shortsTabs) {
-            if (node.isSelected) return true
-        }
-        return false
+    private fun isNodeVisibleToTheUser(node: AccessibilityNodeInfo): Boolean {
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        return node.isVisibleToUser && rect.width() > 0 && rect.height() > 0
     }
 
-    private fun findNodeByViewId(root: AccessibilityNodeInfo, partialId: String): AccessibilityNodeInfo? {
+    private fun hasVisibleViewId(root: AccessibilityNodeInfo, fullyQualifiedId: String): Boolean {
+        return try {
+            val nodes = root.findAccessibilityNodeInfosByViewId(fullyQualifiedId)
+            nodes.isNotEmpty() && nodes.any(::isNodeVisibleToTheUser)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Facebook Katana detection matching Scrolless:
+     * 1. Rejects if "What's on your mind?" is visible (News Feed).
+     * 2. Rejects if Home or Friends tab is selected.
+     * 3. Checks composer specs ("FbShortsComposerAttachmentComponentSpec_STICKER").
+     * 4. Checks selected Reels navigation tab ("Reels," with isSelected).
+     * 5. Checks top header text "Reels".
+     * 6. Fallback structural check: RecyclerView (scrollable) -> Button (long-clickable) -> SurfaceView.
+     */
+    private fun isFacebookKatanaReelsActive(root: AccessibilityNodeInfo, rootBounds: Rect): Boolean {
+        // Fast negative check: News Feed status input
+        try {
+            val newsFeedNodes = root.findAccessibilityNodeInfosByText("What's on your mind?")
+            if (newsFeedNodes.isNotEmpty() && newsFeedNodes.any(::isNodeVisibleToTheUser)) {
+                return false
+            }
+        } catch (_: Exception) {}
+
+        // Fast positive check 1: Scrolless composer attachment stickers
+        try {
+            val stickerNodes = root.findAccessibilityNodeInfosByText("FbShortsComposerAttachmentComponentSpec_STICKER")
+            if (stickerNodes.isNotEmpty() && stickerNodes.any(::isNodeVisibleToTheUser)) {
+                return true
+            }
+            val gifNodes = root.findAccessibilityNodeInfosByText("FbShortsComposerAttachmentComponentSpec_GIF")
+            if (gifNodes.isNotEmpty() && gifNodes.any(::isNodeVisibleToTheUser)) {
+                return true
+            }
+        } catch (_: Exception) {}
+
+        // BFS traversal for tabs, headers, and node structure
+        var isHomeTabSelected = false
+        var isFriendsTabSelected = false
+        var isReelsTabSelected = false
+        var hasReelsHeader = false
+
+        val structuralNodes = mutableListOf<DetectionNode>()
+        val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int?>>()
+        queue.add(root to null)
+        var visited = 0
+        var nextId = 0
+        val screenWidth = rootBounds.width().coerceAtLeast(1)
+        val screenHeight = rootBounds.height().coerceAtLeast(1)
+
+        while (queue.isNotEmpty() && visited < 400) {
+            val (node, parentId) = queue.removeFirst()
+            visited++
+            val isVisible = isNodeVisibleToTheUser(node)
+            var currentStructuralId: Int? = null
+
+            if (isVisible) {
+                val desc = node.contentDescription?.toString()?.lowercase() ?: ""
+                val text = node.text?.toString()?.lowercase() ?: ""
+                val isSelected = node.isSelected
+                val nodeRect = Rect().also(node::getBoundsInScreen)
+
+                // Check negative tabs
+                if (isSelected) {
+                    if (desc.contains("home") || desc.contains("news feed") || text.contains("home") || text.contains("news feed")) {
+                        isHomeTabSelected = true
+                    }
+                    if (desc.contains("friends") || desc.contains("menu") || desc.contains("notifications") ||
+                        text.contains("friends") || text.contains("menu") || text.contains("notifications")
+                    ) {
+                        isFriendsTabSelected = true
+                    }
+                }
+
+                // Check selected Reels tab
+                if (isSelected && (
+                    desc.contains("reels") || desc.contains("video") || desc.contains("watch") ||
+                    text.contains("reels") || text.contains("video") || text.contains("watch")
+                )) {
+                    isReelsTabSelected = true
+                }
+
+                // Check header
+                if (text.equals("reels", ignoreCase = true) && nodeRect.top < screenHeight * 0.25f) {
+                    hasReelsHeader = true
+                }
+
+                // Collect structural layout nodes (Scrolless fallback)
+                val className = node.className?.toString() ?: ""
+                if (className == "androidx.recyclerview.widget.RecyclerView" ||
+                    className == "android.widget.Button" ||
+                    className == "android.view.SurfaceView"
+                ) {
+                    val id = nextId++
+                    currentStructuralId = id
+                    structuralNodes.add(
+                        DetectionNode(
+                            nodeId = id,
+                            parentNodeId = parentId,
+                            className = className,
+                            screenWidthFraction = (nodeRect.width().toFloat() / screenWidth).coerceIn(0f, 1f),
+                            screenHeightFraction = (nodeRect.height().toFloat() / screenHeight).coerceIn(0f, 1f),
+                            isScrollable = node.isScrollable,
+                            isLongClickable = node.isLongClickable
+                        )
+                    )
+                }
+            }
+
+            val childParentId = currentStructuralId ?: parentId
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it to childParentId) }
+            }
+        }
+
+        // If Home or Friends is selected, definitely NOT Reels
+        if (isHomeTabSelected || isFriendsTabSelected) {
+            return false
+        }
+
+        // If Reels tab is selected or Reels header is present
+        if (isReelsTabSelected || hasReelsHeader) {
+            return true
+        }
+
+        // Scrolless Fallback Structural Check:
+        // Full screen RecyclerView (scrollable) -> Button (long clickable) -> SurfaceView
+        val childrenByParent = structuralNodes.groupBy { it.parentNodeId }
+        return structuralNodes.any { node ->
+            node.className == "androidx.recyclerview.widget.RecyclerView" &&
+            node.screenWidthFraction >= 0.9f &&
+            node.screenHeightFraction >= 0.75f &&
+            node.isScrollable &&
+            hasMatchingButtonAndSurfaceView(node.nodeId, childrenByParent)
+        }
+    }
+
+    private fun hasMatchingButtonAndSurfaceView(parentId: Int, childrenByParent: Map<Int?, List<DetectionNode>>): Boolean {
+        val children = childrenByParent[parentId].orEmpty()
+        return children.any { child ->
+            (child.className == "android.widget.Button" &&
+             child.screenWidthFraction >= 0.9f &&
+             child.screenHeightFraction >= 0.75f &&
+             child.isLongClickable &&
+             hasMatchingSurfaceView(child.nodeId, childrenByParent)) ||
+            hasMatchingButtonAndSurfaceView(child.nodeId, childrenByParent)
+        }
+    }
+
+    private fun hasMatchingSurfaceView(parentId: Int, childrenByParent: Map<Int?, List<DetectionNode>>): Boolean {
+        val children = childrenByParent[parentId].orEmpty()
+        return children.any { child ->
+            (child.className == "android.view.SurfaceView" &&
+             child.screenWidthFraction >= 0.9f &&
+             child.screenHeightFraction >= 0.75f) ||
+            hasMatchingSurfaceView(child.nodeId, childrenByParent)
+        }
+    }
+
+    /**
+     * Instagram Reels detection matching Scrolless:
+     * 1. View ID clips_viewer_view_pager (Scrolless ViewId rule).
+     * 2. Selected Reels / Clips navigation tab.
+     * 3. Top header text "Reels".
+     * 4. Rejects if Home / Feed tab is selected.
+     */
+    private fun isInstagramReelsActive(root: AccessibilityNodeInfo, rootBounds: Rect): Boolean {
+        // Fast ViewId check from Scrolless
+        if (hasVisibleViewId(root, "com.instagram.android:id/clips_viewer_view_pager")) {
+            return true
+        }
+
+        var isHomeTabSelected = false
+        var isReelsTabSelected = false
+        var hasReelsHeader = false
+        val screenHeight = rootBounds.height().coerceAtLeast(1)
+
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
-        var checked = 0
-        while (queue.isNotEmpty() && checked < 20) {
+        var visited = 0
+
+        while (queue.isNotEmpty() && visited < 350) {
             val node = queue.removeFirst()
-            checked++
-            val resId = node.viewIdResourceName?.lowercase() ?: ""
-            if (resId.contains(partialId)) {
-                return node
+            visited++
+            if (isNodeVisibleToTheUser(node)) {
+                val desc = node.contentDescription?.toString()?.lowercase() ?: ""
+                val text = node.text?.toString()?.lowercase() ?: ""
+                val isSelected = node.isSelected
+                val nodeRect = Rect().also(node::getBoundsInScreen)
+
+                if (isSelected) {
+                    if (desc.contains("home") || desc.contains("feed") || text.contains("home") || text.contains("feed")) {
+                        isHomeTabSelected = true
+                    }
+                    if (desc.contains("reels") || desc.contains("clips") || text.contains("reels") || text.contains("clips")) {
+                        isReelsTabSelected = true
+                    }
+                }
+
+                if (text.equals("reels", ignoreCase = true) && nodeRect.top < screenHeight * 0.25f) {
+                    hasReelsHeader = true
+                }
             }
+
             for (i in 0 until node.childCount) {
                 node.getChild(i)?.let { queue.add(it) }
             }
         }
-        return null
+
+        if (isHomeTabSelected) return false
+        return isReelsTabSelected || hasReelsHeader
     }
 
-    private fun handleScroll(packageName: String, appName: String, event: AccessibilityEvent) {
-        val now = System.currentTimeMillis()
-        if (now - lastScrollTimestamp < MIN_SCROLL_INTERVAL_MS) {
-            return
+    /**
+     * YouTube Shorts detection:
+     * 1. View ID reel_player_page_container (Scrolless rule).
+     * 2. Selected Shorts tab.
+     */
+    private fun isYouTubeShortsActive(root: AccessibilityNodeInfo, packageName: String): Boolean {
+        if (hasVisibleViewId(root, "$packageName:id/reel_player_page_container")) {
+            return true
         }
 
-        // 1. STRICTLY VERTICAL SCROLL: Rejects horizontal swiping (photos, stories, carousels)
-        if (!isStrictlyVerticalScroll(event)) {
-            Log.d(TAG, "Rejected horizontal swipe on $packageName")
-            return
-        }
-
-        val className = event.className?.toString() ?: ""
-
-        // 2. Reject if confirmed on regular feed/profile/chat
-        if (isUnambiguousNegativeScreen(packageName, className, event)) {
-            cachedIsReelContext = false
-            if (isCurrentlyWatchingReels) {
-                isCurrentlyWatchingReels = false
-                onReelVisibilityChanged?.invoke(packageName, appName, false)
+        try {
+            val tabNodes = root.findAccessibilityNodeInfosByText("Shorts")
+            if (tabNodes.isNotEmpty() && tabNodes.any { it.isSelected && isNodeVisibleToTheUser(it) }) {
+                return true
             }
-            return
+        } catch (_: Exception) {}
+
+        return false
+    }
+
+    /**
+     * TikTok detection:
+     * Player view (Scrolless rule) or main feed vertical pager.
+     */
+    private fun isTikTokActive(root: AccessibilityNodeInfo, packageName: String): Boolean {
+        if (hasVisibleViewId(root, "$packageName:id/player_view") ||
+            hasVisibleViewId(root, "$packageName:id/simplayer_api_player_view")
+        ) {
+            return true
         }
-
-        // 3. Verify Reels / Shorts / TikTok / Spotify video context
-        val isConfirmedReel = if (isTikTok(packageName)) {
-            !isUnambiguousNegativeScreen(packageName, className, event)
-        } else {
-            cachedIsReelContext || isPositiveReelScreen(packageName, className, event)
-        }
-
-        if (!isConfirmedReel) {
-            Log.d(TAG, "Scroll ignored - not in dedicated reels/shorts tab ($packageName)")
-            return
-        }
-
-        // Validated vertical reel swipe!
-        lastScrollTimestamp = now
-        // Do not force cachedIsReelContext = true here, rely on evaluateScreenContext
-        // to manage lifecycle properly and prevent sticking on tab switches.
-
-        if (!isCurrentlyWatchingReels) {
-            isCurrentlyWatchingReels = true
-            onReelVisibilityChanged?.invoke(packageName, appName, true)
-        }
-
-        Log.d(TAG, "Valid vertical reel swipe detected on $appName ($packageName)")
-        onScrollDetected(packageName, appName)
+        return true
     }
 }
