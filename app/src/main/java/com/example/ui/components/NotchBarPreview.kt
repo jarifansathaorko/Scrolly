@@ -374,13 +374,6 @@ fun NotchBarPreview(
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Black
                             )
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text(
-                                text = shortApp.lowercase(),
-                                color = Color(0xFFBBBBBB),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Medium
-                            )
                             Spacer(modifier = Modifier.width(6.dp))
                             Box(
                                 modifier = Modifier

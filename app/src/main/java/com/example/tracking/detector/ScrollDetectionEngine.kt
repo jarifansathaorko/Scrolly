@@ -83,13 +83,19 @@ class ScrollDetectionEngine(
 
         val appName = AppRecognitionEngine.getAppName(packageName)
 
-        // 3. Scroll event processing (Strictly vertical & debounced)
+        // 3. Tab or Button clicks (Instant detection when user taps Reels or Shorts tab!)
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            handleViewClicked(packageName, appName, event)
+            return
+        }
+
+        // 4. Scroll event processing (Strictly vertical & debounced)
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
             handleScroll(packageName, appName, event)
             return
         }
 
-        // 4. Tab / Pane transitions (Rate-limited to prevent battery drain from frequent updates)
+        // 5. Tab / Pane transitions (Rate-limited to prevent battery drain from frequent updates)
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             val now = System.currentTimeMillis()
             if (now - lastContentChangeEvalTimestamp < CONTENT_CHANGE_EVAL_THROTTLE_MS) {
@@ -108,6 +114,62 @@ class ScrollDetectionEngine(
     }
 
     /**
+     * Scrolless-inspired click detection:
+     * Immediately catches user tapping "Reels" / "Shorts" navigation items to show the bar with 0 delay.
+     * Also detects when user leaves Reels (taps Home, Search, Profile, Back, etc.) to hide the bar immediately.
+     */
+    private fun handleViewClicked(packageName: String, appName: String, event: AccessibilityEvent) {
+        val textList = event.text.map { it.toString().lowercase() }
+        val contentDesc = event.contentDescription?.toString()?.lowercase() ?: ""
+        val clickedText = (textList + listOf(contentDesc)).joinToString(" ")
+        val resId = (event.source?.viewIdResourceName ?: "").lowercase()
+
+        // 1. User clicked into Reels or Shorts
+        val isReelClick = clickedText.contains("reels") ||
+                clickedText.contains("shorts") ||
+                clickedText.contains("spotlight") ||
+                resId.contains("reels") ||
+                resId.contains("clips") ||
+                resId.contains("shorts")
+
+        if (isReelClick) {
+            cachedIsReelContext = true
+            if (!isCurrentlyWatchingReels) {
+                isCurrentlyWatchingReels = true
+                onReelVisibilityChanged?.invoke(packageName, appName, true)
+            }
+            return
+        }
+
+        // 2. User clicked out of Reels (Home feed, Search/Explore grid, Profile, Messages, Back)
+        val isExitClick = clickedText.contains("home") ||
+                clickedText.contains("search") ||
+                clickedText.contains("explore") ||
+                clickedText.contains("notifications") ||
+                clickedText.contains("profile") ||
+                clickedText.contains("direct") ||
+                clickedText.contains("messages") ||
+                clickedText.contains("subscriptions") ||
+                clickedText.contains("library") ||
+                clickedText.contains("you") ||
+                clickedText.contains("close") ||
+                clickedText.contains("back") ||
+                resId.contains("home_tab") ||
+                resId.contains("search_tab") ||
+                resId.contains("profile_tab") ||
+                resId.contains("direct_tab") ||
+                resId.contains("action_bar_button_back")
+
+        if (isExitClick) {
+            cachedIsReelContext = false
+            if (isCurrentlyWatchingReels) {
+                isCurrentlyWatchingReels = false
+                onReelVisibilityChanged?.invoke(packageName, appName, false)
+            }
+        }
+    }
+
+    /**
      * Checks if the event is strictly a vertical swipe.
      * Rejects horizontal swipes (left-right swiping across stories, carousels, tabs, cards).
      */
@@ -116,22 +178,25 @@ class ScrollDetectionEngine(
             val deltaX = event.scrollDeltaX
             val deltaY = event.scrollDeltaY
 
-            // If horizontal movement occurred without vertical movement -> Left/Right swipe
-            if (deltaX != 0 && deltaY == 0) {
-                return false
-            }
+            // In Android, -1 indicates SCROLL_DELTA_UNDEFINED. Only evaluate when coordinates are actually reported.
+            if (deltaX != -1 && deltaY != -1) {
+                // If horizontal movement occurred without vertical movement -> Left/Right swipe
+                if (deltaX != 0 && deltaY == 0) {
+                    return false
+                }
 
-            // If horizontal movement exceeds vertical movement -> horizontal swipe
-            if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 2) {
-                return false
-            }
+                // If horizontal movement exceeds vertical movement -> horizontal swipe
+                if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 2) {
+                    return false
+                }
 
-            // If vertical delta is reported and positive (down scroll)
-            if (deltaY > 0) {
-                return true
-            } else if (deltaY < 0) {
-                // Up scroll, ignore
-                return false
+                // If vertical delta is reported and positive (downward scroll to next reel)
+                if (deltaY > 0) {
+                    return true
+                } else if (deltaY < 0) {
+                    // Upward scroll, ignore
+                    return false
+                }
             }
         }
 

@@ -8,7 +8,6 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,21 +15,23 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -38,10 +39,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -50,6 +50,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.repository.IslandPlacementMode
@@ -67,11 +68,10 @@ import com.example.ui.theme.SleekTextPrimary
 import com.example.ui.theme.SleekTextSecondary
 
 /**
- * Interactive iPhone-Style Dynamic Island Customizer & Auto-Calibrator.
- * - Detects hardware cutout size and position automatically.
- * - Supports Wrap Around Notch (camera framed in center gap) and Below Notch modes.
- * - Adjusts center cutout clearance gap so content is NEVER hidden by the notch.
- * - Keypad and precision sliders for micro-calibration matching social media screen boundaries.
+ * Device Notch Finder & Auto-Adjuster
+ * Automatically detects the phone's hardware camera cutout / notch area
+ * and calibrates the Dynamic Bar directly over/beneath the notch area.
+ * Keeps the bar in its solid, compact first-shown form so punch-holes never obscure the count.
  */
 @Composable
 fun NotchDynamicIslandCustomizer(
@@ -102,7 +102,7 @@ fun NotchDynamicIslandCustomizer(
                 .fillMaxWidth()
                 .padding(20.dp)
         ) {
-            // Header Row with Title and Expand/Collapse Button
+            // Header Row: Notch Area Finder
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -113,26 +113,34 @@ fun NotchDynamicIslandCustomizer(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(38.dp)
+                            .size(40.dp)
                             .clip(CircleShape)
-                            .background(SleekCardHighlight),
+                            .background(SleekPrimary.copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(text = "🏝️", fontSize = 18.sp)
+                        Icon(
+                            imageVector = Icons.Default.CenterFocusStrong,
+                            contentDescription = "Notch Finder",
+                            tint = SleekPrimary,
+                            modifier = Modifier.size(22.dp)
+                        )
                     }
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
-                            text = "Dynamic Island & Notch",
+                            text = "Device Notch Finder",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = SleekTextPrimary
                             )
                         )
                         Text(
-                            text = "${config.placementMode.title.substringBefore(" (")} • Y: ${config.offsetY}dp, Gap: ${config.cutoutGapWidth}dp",
+                            text = if (config.autoAdjusted)
+                                "✓ Automatically Adjusted Over Notch Area"
+                            else
+                                "Tap to detect device notch & calibrate",
                             style = MaterialTheme.typography.labelSmall.copy(
-                                color = SleekGreen,
+                                color = if (config.autoAdjusted) SleekGreen else SleekTextSecondary,
                                 fontWeight = FontWeight.SemiBold
                             )
                         )
@@ -151,31 +159,69 @@ fun NotchDynamicIslandCustomizer(
                 }
             }
 
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // PRIMARY NOTCH FINDER ACTION BUTTON
+            Button(
+                onClick = onTriggerAutoDetect,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("btn_find_device_notch"),
+                colors = ButtonDefaults.buttonColors(containerColor = SleekPrimary),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = "Auto Detect Notch",
+                        modifier = Modifier.size(18.dp),
+                        tint = Color.White
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Find Device Notch & Auto-Adjust",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(12.dp))
 
-            // AUTO-CALIBRATION HARDWARE STATUS BANNER
+            // HARDWARE NOTCH STATUS CARD
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color(0xFF141A22))
-                    .border(1.dp, SleekPrimary.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
-                    .padding(12.dp)
+                    .border(1.dp, SleekBorder, RoundedCornerShape(16.dp))
+                    .padding(14.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(text = "📐", fontSize = 12.sp)
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = "Status",
+                                tint = SleekGreen,
+                                modifier = Modifier.size(16.dp)
+                            )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = if (config.detectedCutout.hasCutout)
-                                    "Hardware Cutout: ${config.detectedCutout.width}×${config.detectedCutout.height}dp (Center: ${config.detectedCutout.centerX}dp)"
+                                    "Hardware Cutout Found"
                                 else
-                                    "Status Bar Inset: ${config.detectedCutout.safeInsetTop}dp safe space",
+                                    "Status Bar Safe Zone Found",
                                 style = MaterialTheme.typography.labelMedium.copy(
                                     color = SleekTextPrimary,
                                     fontWeight = FontWeight.Bold
@@ -183,38 +229,31 @@ fun NotchDynamicIslandCustomizer(
                             )
                         }
                         Text(
-                            text = if (config.placementMode == IslandPlacementMode.WRAP_AROUND_NOTCH)
-                                "Island envelopes camera lens. Content sits safely on wings."
-                            else
-                                "Floating capsule sits safely beneath the camera.",
+                            text = "Safe Y: ${config.offsetY}dp",
                             style = MaterialTheme.typography.labelSmall.copy(
-                                color = SleekTextMuted,
-                                fontSize = 11.sp
+                                color = SleekPrimary,
+                                fontWeight = FontWeight.Bold
                             )
                         )
                     }
 
-                    Button(
-                        onClick = onTriggerAutoDetect,
-                        colors = ButtonDefaults.buttonColors(containerColor = SleekPrimary),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.padding(start = 8.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.AutoAwesome,
-                                contentDescription = "Auto Detect",
-                                modifier = Modifier.size(14.dp),
-                                tint = Color.White
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Auto-Fit", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Text(
+                        text = if (config.detectedCutout.hasCutout)
+                            "Cutout: ${config.detectedCutout.width}×${config.detectedCutout.height}dp (Center: ${config.detectedCutout.centerX}dp). Dynamic bar is anchored directly over the notch area."
+                        else
+                            "Top Safe Inset: ${config.detectedCutout.safeInsetTop}dp. Dynamic bar is positioned safely without covering screen content.",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = SleekTextMuted,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp
+                        )
+                    )
                 }
             }
 
-            // --- EXPANDED CALIBRATION CONTROLS ---
+            // --- EXPANDED DETAILS & MICRO-ADJUSTMENT ---
             AnimatedVisibility(
                 visible = isExpanded,
                 enter = expandVertically() + fadeIn(),
@@ -225,9 +264,9 @@ fun NotchDynamicIslandCustomizer(
                         .fillMaxWidth()
                         .padding(top = 16.dp)
                 ) {
-                    // 1. PLACEMENT MODE SELECTOR
+                    // VISUAL NOTCH AREA DIAGRAM
                     Text(
-                        text = "DYNAMIC ISLAND PLACEMENT STYLE",
+                        text = "NOTCH AREA ALIGNMENT PREVIEW",
                         style = MaterialTheme.typography.labelSmall.copy(
                             color = SleekTextMuted,
                             fontWeight = FontWeight.Bold,
@@ -237,149 +276,90 @@ fun NotchDynamicIslandCustomizer(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        IslandPlacementMode.entries.forEach { mode ->
-                            val isSelected = config.placementMode == mode
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(if (isSelected) SleekPrimary.copy(alpha = 0.22f) else SleekCardSurfaceSecondary)
-                                    .border(
-                                        1.5.dp,
-                                        if (isSelected) SleekPrimary else SleekBorder,
-                                        RoundedCornerShape(16.dp)
-                                    )
-                                    .clickable { onSetPlacementMode(mode) }
-                                    .padding(horizontal = 10.dp, vertical = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text(text = mode.iconEmoji, fontSize = 18.sp)
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = mode.title.substringBefore(" ("),
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            color = if (isSelected) SleekTextPrimary else SleekTextSecondary,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                            fontSize = 11.sp
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // 2. CAMERA CLEARANCE GAP WIDTH (When in Wrap Around Notch Mode)
-                    if (config.placementMode == IslandPlacementMode.WRAP_AROUND_NOTCH) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(SleekCardSurfaceSecondary)
-                                .padding(12.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "Camera Cutout Gap Width",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        color = SleekTextPrimary,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                )
-                                Text(
-                                    text = "${config.cutoutGapWidth} dp",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        color = SleekPrimary,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                )
-                            }
-                            Text(
-                                text = "Clears empty space for hardware lens so numbers are never covered",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    color = SleekTextMuted,
-                                    fontSize = 10.sp
-                                )
-                            )
-                            Slider(
-                                value = config.cutoutGapWidth.toFloat(),
-                                onValueChange = { onSetCutoutGapWidth(it.toInt()) },
-                                valueRange = 20f..100f,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = SleekPrimary,
-                                    activeTrackColor = SleekPrimary,
-                                    inactiveTrackColor = SleekBorder
-                                )
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                    }
-
-                    // 3. HARDWARE NOTCH PRESETS
-                    Text(
-                        text = "NOTCH / CUTOUT PRESET TYPE",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            color = SleekTextMuted,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 10.sp,
-                            letterSpacing = 1.sp
-                        )
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            .height(110.dp)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(Color(0xFF0D1117))
+                            .border(1.dp, SleekBorder, RoundedCornerShape(20.dp)),
+                        contentAlignment = Alignment.TopCenter
                     ) {
-                        NotchType.entries.forEach { type ->
-                            val isSelected = config.notchType == type
+                        // Phone top border line
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(2.dp)
+                                .background(Color(0xFF30363D))
+                        )
+
+                        // Hardware Camera Cutout (Punch-Hole)
+                        Box(
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .offset(x = (config.offsetX).dp)
+                                .size(14.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF1F242C))
+                                .border(1.dp, Color(0xFF484F58), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Box(
                                 modifier = Modifier
-                                    .testTag("notch_type_${type.name.lowercase()}")
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(if (isSelected) SleekPrimary.copy(alpha = 0.2f) else SleekCardSurfaceSecondary)
-                                    .border(
-                                        1.5.dp,
-                                        if (isSelected) SleekPrimary else SleekBorder,
-                                        RoundedCornerShape(16.dp)
-                                    )
-                                    .clickable { onSelectNotchType(type) }
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(text = type.iconEmoji, fontSize = 14.sp)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = type.title,
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            color = if (isSelected) SleekTextPrimary else SleekTextSecondary,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                            fontSize = 11.sp
-                                        )
-                                    )
-                                }
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF090D12))
+                            )
+                        }
+
+                        // Compact Solid Dynamic Bar Capsule (Positioned directly over/below notch)
+                        Box(
+                            modifier = Modifier
+                                .padding(top = 34.dp)
+                                .offset(x = (config.offsetX).dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(Color.Black)
+                                .border(1.dp, Color(0xFF333333), RoundedCornerShape(20.dp))
+                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(text = "🔥", fontSize = 11.sp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "48",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Black
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF4CAF50))
+                                )
                             }
                         }
+
+                        // Status caption at bottom of diagram
+                        Text(
+                            text = "✓ Solid Compact Bar • Numbers 100% visible outside punch-hole",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = SleekGreen,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 8.dp)
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // 4. DIRECTIONAL ARROW KEYPAD FOR MICRO-TUNING
+                    // FINE-TUNING MICRO NUDGE (±2 DP)
                     Text(
-                        text = "FINE-TUNING KEYPAD (1-2 DP STEPS)",
+                        text = "MICRO-NUDGE OVER NOTCH (±2 DP)",
                         style = MaterialTheme.typography.labelSmall.copy(
                             color = SleekTextMuted,
                             fontWeight = FontWeight.Bold,
@@ -394,171 +374,97 @@ fun NotchDynamicIslandCustomizer(
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Keypad layout
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            // UP ARROW
-                            Box(
+                            // Up
+                            IconButton(
+                                onClick = { onAdjustPosition(0, -2) },
                                 modifier = Modifier
-                                    .testTag("arrow_up_button")
-                                    .size(48.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(SleekCardSurfaceElevated)
-                                    .border(1.dp, SleekBorder, RoundedCornerShape(14.dp))
-                                    .clickable { onAdjustPosition(0, -2) },
-                                contentAlignment = Alignment.Center
+                                    .size(38.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(SleekCardSurfaceSecondary)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.ArrowUpward,
-                                    contentDescription = "Move Up (Decrease Y)",
+                                    contentDescription = "Nudge Up",
                                     tint = SleekTextPrimary,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
 
-                            // MIDDLE ROW: LEFT, RESET, RIGHT
+                            // Left, Center Auto-Fit, Right
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // LEFT ARROW
-                                Box(
+                                IconButton(
+                                    onClick = { onAdjustPosition(-2, 0) },
                                     modifier = Modifier
-                                        .testTag("arrow_left_button")
-                                        .size(48.dp)
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(SleekCardSurfaceElevated)
-                                        .border(1.dp, SleekBorder, RoundedCornerShape(14.dp))
-                                        .clickable { onAdjustPosition(-2, 0) },
-                                    contentAlignment = Alignment.Center
+                                        .size(38.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(SleekCardSurfaceSecondary)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                        contentDescription = "Move Left",
-                                        tint = SleekTextPrimary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
+                                    Text("◄", color = SleekTextPrimary, fontSize = 12.sp)
                                 }
 
-                                // CENTER RESET BUTTON
                                 Box(
                                     modifier = Modifier
-                                        .testTag("arrow_reset_button")
-                                        .size(48.dp)
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(SleekPrimary.copy(alpha = 0.15f))
-                                        .border(1.2.dp, SleekPrimary.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
-                                        .clickable { onResetDefaults() },
+                                        .size(38.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(SleekPrimary.copy(alpha = 0.2f))
+                                        .border(1.dp, SleekPrimary, RoundedCornerShape(12.dp))
+                                        .clickable { onTriggerAutoDetect() },
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Refresh,
-                                        contentDescription = "Reset To Defaults",
-                                        tint = SleekPrimary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
+                                    Text("🎯", fontSize = 14.sp)
                                 }
 
-                                // RIGHT ARROW
-                                Box(
+                                IconButton(
+                                    onClick = { onAdjustPosition(2, 0) },
                                     modifier = Modifier
-                                        .testTag("arrow_right_button")
-                                        .size(48.dp)
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(SleekCardSurfaceElevated)
-                                        .border(1.dp, SleekBorder, RoundedCornerShape(14.dp))
-                                        .clickable { onAdjustPosition(2, 0) },
-                                    contentAlignment = Alignment.Center
+                                        .size(38.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(SleekCardSurfaceSecondary)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.ArrowForward,
-                                        contentDescription = "Move Right",
+                                        contentDescription = "Nudge Right",
                                         tint = SleekTextPrimary,
-                                        modifier = Modifier.size(20.dp)
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }
 
-                            // DOWN ARROW
-                            Box(
+                            // Down
+                            IconButton(
+                                onClick = { onAdjustPosition(0, 2) },
                                 modifier = Modifier
-                                    .testTag("arrow_down_button")
-                                    .size(48.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(SleekCardSurfaceElevated)
-                                    .border(1.dp, SleekBorder, RoundedCornerShape(14.dp))
-                                    .clickable { onAdjustPosition(0, 2) },
-                                contentAlignment = Alignment.Center
+                                    .size(38.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(SleekCardSurfaceSecondary)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.ArrowDownward,
-                                    contentDescription = "Move Down (Increase Y)",
+                                    contentDescription = "Nudge Down",
                                     tint = SleekTextPrimary,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(16.dp)
                                 )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(16.dp))
-
-                        // Quick step jump buttons & test scroll
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = "Quick Step Nudge",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    color = SleekTextMuted,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            )
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Button(
-                                    onClick = { onAdjustPosition(0, 8) },
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = SleekCardSurfaceSecondary)
-                                ) {
-                                    Text("⬇️ +8dp", fontSize = 10.sp, color = SleekTextPrimary, fontWeight = FontWeight.Bold)
-                                }
-                                Button(
-                                    onClick = { onAdjustPosition(0, -8) },
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = SleekCardSurfaceSecondary)
-                                ) {
-                                    Text("⬆️ -8dp", fontSize = 10.sp, color = SleekTextPrimary, fontWeight = FontWeight.Bold)
-                                }
-                            }
-
-                            Button(
-                                onClick = onTestScroll,
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = SleekPrimary)
-                            ) {
-                                Text("🔥 +1 Test Scroll Bounce", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // 5. PRECISION SLIDERS FOR Y AND X
+                    // POSITION SLIDERS
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = "Vertical Offset (Y from screen top)",
+                                text = "Vertical Offset (Y)",
                                 style = MaterialTheme.typography.labelSmall.copy(color = SleekTextSecondary)
                             )
                             Text(
@@ -572,7 +478,7 @@ fun NotchDynamicIslandCustomizer(
                         Slider(
                             value = config.offsetY.toFloat(),
                             onValueChange = { onSetPosition(config.offsetX, it.toInt()) },
-                            valueRange = 0f..120f,
+                            valueRange = 0f..100f,
                             colors = SliderDefaults.colors(
                                 thumbColor = SleekPrimary,
                                 activeTrackColor = SleekPrimary,
@@ -587,7 +493,7 @@ fun NotchDynamicIslandCustomizer(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = "Horizontal Offset (X from center)",
+                                text = "Horizontal Offset (X)",
                                 style = MaterialTheme.typography.labelSmall.copy(color = SleekTextSecondary)
                             )
                             Text(
@@ -601,7 +507,7 @@ fun NotchDynamicIslandCustomizer(
                         Slider(
                             value = config.offsetX.toFloat(),
                             onValueChange = { onSetPosition(it.toInt(), config.offsetY) },
-                            valueRange = -100f..100f,
+                            valueRange = -60f..60f,
                             colors = SliderDefaults.colors(
                                 thumbColor = SleekPrimary,
                                 activeTrackColor = SleekPrimary,
@@ -612,38 +518,24 @@ fun NotchDynamicIslandCustomizer(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // 6. TOGGLES
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(SleekCardSurfaceSecondary)
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    // RESET BUTTON
+                    OutlinedButton(
+                        onClick = onResetDefaults,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Show Cutout Silhouette Guide",
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = SleekTextPrimary
-                                )
-                            )
-                            Text(
-                                text = "Draws purple indicator where the camera hole sits",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    color = SleekTextMuted,
-                                    fontSize = 10.sp
-                                )
-                            )
-                        }
-                        Switch(
-                            checked = config.showCutoutGuide,
-                            onCheckedChange = onSetShowGuide,
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.White,
-                                checkedTrackColor = SleekPrimary
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Reset",
+                            tint = SleekTextSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Reset to Default Notch Position",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                color = SleekTextSecondary,
+                                fontWeight = FontWeight.SemiBold
                             )
                         )
                     }

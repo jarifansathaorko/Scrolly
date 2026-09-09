@@ -8,6 +8,7 @@ import android.view.DisplayCutout
 import android.view.Window
 import android.view.WindowInsets
 import android.view.WindowManager
+import androidx.annotation.RequiresApi
 import com.example.data.repository.HardwareCutoutInfo
 import com.example.data.repository.NotchSettingsRepository
 
@@ -89,6 +90,7 @@ object DisplayCutoutDetectionService {
     /**
      * Parses the DisplayCutout bounds to get exact notch center X, top, bottom, width, height, and safe top insets.
      */
+    @RequiresApi(Build.VERSION_CODES.P)
     fun parseDisplayCutout(cutout: DisplayCutout, context: Context): HardwareCutoutInfo {
         val density = context.resources.displayMetrics.density
         val screenWidthPx = context.resources.displayMetrics.widthPixels

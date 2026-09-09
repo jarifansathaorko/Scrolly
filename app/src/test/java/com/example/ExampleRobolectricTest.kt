@@ -43,6 +43,7 @@ class ExampleRobolectricTest {
     // Select Dynamic Island
     repo.selectNotchType(NotchType.DYNAMIC_ISLAND)
     assertEquals(NotchType.DYNAMIC_ISLAND, repo.configFlow.value.notchType)
+    assertEquals(38, repo.configFlow.value.offsetY)
     assertTrue(repo.configFlow.value.isDynamicIslandMode)
   }
 

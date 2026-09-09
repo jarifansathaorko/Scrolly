@@ -33,18 +33,18 @@ enum class NotchType(
 ) {
     DYNAMIC_ISLAND(
         title = "Dynamic Island (iPhone)",
-        description = "Apple-style pill with wings on sides of camera cutout",
+        description = "Apple-style compact pill safely below camera cutout",
         defaultOffsetX = 0,
-        defaultOffsetY = 0,
-        defaultCutoutWidth = 36,
+        defaultOffsetY = 38,
+        defaultCutoutWidth = 0,
         iconEmoji = "🏝️"
     ),
     ROUND_PUNCH_HOLE_CENTER(
         title = "Punch-Hole (Center)",
         description = "Standard round top-center camera",
         defaultOffsetX = 0,
-        defaultOffsetY = 0,
-        defaultCutoutWidth = 32,
+        defaultOffsetY = 38,
+        defaultCutoutWidth = 0,
         iconEmoji = "⚪"
     ),
     WIDE_NOTCH(
@@ -101,10 +101,10 @@ data class HardwareCutoutInfo(
 
 data class NotchConfiguration(
     val notchType: NotchType = NotchType.DYNAMIC_ISLAND,
-    val placementMode: IslandPlacementMode = IslandPlacementMode.WRAP_AROUND_NOTCH,
+    val placementMode: IslandPlacementMode = IslandPlacementMode.BELOW_NOTCH,
     val offsetX: Int = 0, // Horizontal offset in dp (-150 to +150)
-    val offsetY: Int = 0, // Vertical offset in dp from top of physical screen (0 to 140)
-    val cutoutGapWidth: Int = 36, // Width of the camera cutout space in dp (nothing rendered here)
+    val offsetY: Int = 38, // Vertical offset in dp from top of physical screen (below camera cutout)
+    val cutoutGapWidth: Int = 0, // Gap width in dp (0 for sleek unified compact pill)
     val isDynamicIslandMode: Boolean = true,
     val showCutoutGuide: Boolean = false,
     val autoAdjusted: Boolean = false,
@@ -127,16 +127,18 @@ class NotchSettingsRepository(context: Context) {
             NotchType.DYNAMIC_ISLAND
         }
 
-        val modeName = prefs.getString(KEY_PLACEMENT_MODE, IslandPlacementMode.WRAP_AROUND_NOTCH.name)
+        val modeName = prefs.getString(KEY_PLACEMENT_MODE, IslandPlacementMode.BELOW_NOTCH.name)
         val placementMode = try {
-            IslandPlacementMode.valueOf(modeName ?: IslandPlacementMode.WRAP_AROUND_NOTCH.name)
+            IslandPlacementMode.valueOf(modeName ?: IslandPlacementMode.BELOW_NOTCH.name)
         } catch (e: Exception) {
-            IslandPlacementMode.WRAP_AROUND_NOTCH
+            IslandPlacementMode.BELOW_NOTCH
         }
 
+        val defaultY = if (placementMode == IslandPlacementMode.BELOW_NOTCH && notchType.defaultOffsetY == 0) 38 else notchType.defaultOffsetY
         val offsetX = prefs.getInt(KEY_OFFSET_X, notchType.defaultOffsetX)
-        val offsetY = prefs.getInt(KEY_OFFSET_Y, notchType.defaultOffsetY)
-        val cutoutGapWidth = prefs.getInt(KEY_CUTOUT_GAP_WIDTH, notchType.defaultCutoutWidth)
+        val offsetY = prefs.getInt(KEY_OFFSET_Y, defaultY)
+        val defaultGap = if (placementMode == IslandPlacementMode.BELOW_NOTCH) 0 else notchType.defaultCutoutWidth
+        val cutoutGapWidth = prefs.getInt(KEY_CUTOUT_GAP_WIDTH, defaultGap)
         val isIsland = prefs.getBoolean(KEY_IS_DYNAMIC_ISLAND, true)
         val showGuide = prefs.getBoolean(KEY_SHOW_GUIDE, false)
         val autoAdjusted = prefs.getBoolean(KEY_AUTO_ADJUSTED, false)
@@ -180,23 +182,30 @@ class NotchSettingsRepository(context: Context) {
             else -> NotchType.DYNAMIC_ISLAND
         }
 
-        val recommendedY = if (current.placementMode == IslandPlacementMode.WRAP_AROUND_NOTCH) {
-            cutout.top.coerceAtLeast(0)
+        // Calibrate position directly over / below the notch area so camera never covers count
+        val recommendedY = if (cutout.hasCutout) {
+            (cutout.bottom + 4).coerceAtLeast(38)
         } else {
-            (cutout.bottom + 4).coerceAtLeast(32)
+            (cutout.safeInsetTop + 4).coerceAtLeast(38)
         }
-
-        val recommendedCutoutWidth = maxOf(cutout.width + 12, 34)
 
         val updated = current.copy(
             detectedCutout = cutout,
             notchType = detectedNotchType,
+            placementMode = IslandPlacementMode.BELOW_NOTCH,
             offsetX = cutout.centerX,
             offsetY = recommendedY,
-            cutoutGapWidth = recommendedCutoutWidth,
+            cutoutGapWidth = 0,
             autoAdjusted = true
         )
         saveConfig(updated)
+    }
+
+    /**
+     * Finds device hardware notch and automatically adjusts dynamic bar directly over the notch area.
+     */
+    fun findAndAdjustOverNotch(cutout: HardwareCutoutInfo) {
+        autoCalibrateWithCutout(cutout)
     }
 
     fun setPlacementMode(mode: IslandPlacementMode) {
@@ -204,7 +213,7 @@ class NotchSettingsRepository(context: Context) {
         val newY = if (mode == IslandPlacementMode.WRAP_AROUND_NOTCH) {
             current.detectedCutout.top.coerceAtLeast(0)
         } else {
-            (current.detectedCutout.bottom + 4).coerceAtLeast(34)
+            (current.detectedCutout.bottom + 4).coerceAtLeast(38)
         }
         val updated = current.copy(
             placementMode = mode,
@@ -215,7 +224,7 @@ class NotchSettingsRepository(context: Context) {
 
     fun setCutoutGapWidth(gapWidth: Int) {
         val current = _configFlow.value
-        val updated = current.copy(cutoutGapWidth = gapWidth.coerceIn(16, 160))
+        val updated = current.copy(cutoutGapWidth = gapWidth.coerceIn(0, 160))
         saveConfig(updated)
     }
 
@@ -261,12 +270,13 @@ class NotchSettingsRepository(context: Context) {
     fun resetToDefaults() {
         val current = _configFlow.value
         val cutout = current.detectedCutout
+        val safeY = if (cutout.hasCutout) maxOf(cutout.bottom + 4, 38) else maxOf(cutout.safeInsetTop + 4, 38)
         val updated = NotchConfiguration(
             notchType = NotchType.DYNAMIC_ISLAND,
-            placementMode = IslandPlacementMode.WRAP_AROUND_NOTCH,
+            placementMode = IslandPlacementMode.BELOW_NOTCH,
             offsetX = cutout.centerX,
-            offsetY = cutout.top.coerceAtLeast(0),
-            cutoutGapWidth = if (cutout.hasCutout) maxOf(cutout.width + 12, 34) else 36,
+            offsetY = safeY,
+            cutoutGapWidth = 0,
             isDynamicIslandMode = true,
             showCutoutGuide = false,
             autoAdjusted = cutout.hasCutout,

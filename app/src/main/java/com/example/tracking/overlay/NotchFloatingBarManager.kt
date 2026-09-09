@@ -18,6 +18,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.example.ScrollyApp
+import com.example.data.repository.IslandPlacementMode
 import com.example.tracking.accessibility.AccessibilityHelper
 import com.example.tracking.detector.DisplayCutoutDetectionService
 import kotlinx.coroutines.CoroutineScope
@@ -127,8 +128,7 @@ class NotchFloatingBarManager(
             if (isReelActive) {
                 pillContainer?.visibility = View.VISIBLE
                 pillContainer?.alpha = 1f
-                val config = ScrollyApp.instance.notchSettingsRepository.configFlow.value
-                animationController?.animateEntrance(config.cutoutGapWidth)
+                animationController?.enforceStaticCompactPill()
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to attach overlay window", e)
@@ -150,8 +150,7 @@ class NotchFloatingBarManager(
             updateUI(scrollCount, appName, dailyGoal, animatePulse = false)
             pillContainer?.visibility = View.VISIBLE
             pillContainer?.alpha = 1f
-            val config = ScrollyApp.instance.notchSettingsRepository.configFlow.value
-            animationController?.animateEntrance(config.cutoutGapWidth)
+            animationController?.enforceStaticCompactPill()
         }
 
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -162,7 +161,8 @@ class NotchFloatingBarManager(
     }
 
     /**
-     * Updates live scroll count with elastic spring bounce while maintaining constant window attachment.
+     * Updates live scroll count instantly without layout morphing or expanding animations.
+     * Prevents numbers from shifting behind the hardware notch/cutout.
      */
     fun updateCount(newCount: Int, appName: String = currentAppName, dailyGoal: Int = targetDailyGoal) {
         currentScrollCount = newCount
@@ -176,9 +176,7 @@ class NotchFloatingBarManager(
             } else {
                 pillContainer?.visibility = View.VISIBLE
                 pillContainer?.alpha = 1f
-                updateUI(newCount, appName, dailyGoal, animatePulse = true)
-                val config = ScrollyApp.instance.notchSettingsRepository.configFlow.value
-                animationController?.triggerScrollBounce(config.cutoutGapWidth)
+                updateUI(newCount, appName, dailyGoal, animatePulse = false)
             }
         }
 
@@ -251,6 +249,7 @@ class NotchFloatingBarManager(
                 WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS
 
         val config = ScrollyApp.instance.notchSettingsRepository.configFlow.value
+        val safeY = if (config.offsetY <= 0 && config.placementMode == IslandPlacementMode.BELOW_NOTCH) 38 else config.offsetY
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -261,7 +260,7 @@ class NotchFloatingBarManager(
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             x = dpToPx(config.offsetX)
-            y = dpToPx(config.offsetY)
+            y = dpToPx(safeY)
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -303,16 +302,16 @@ class NotchFloatingBarManager(
         val pill = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5))
+            setPadding(dpToPx(14), dpToPx(6), dpToPx(14), dpToPx(6))
 
             val shape = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = dpToPx(18).toFloat()
+                cornerRadius = dpToPx(20).toFloat()
                 setColor(Color.parseColor("#000000")) // Pure Apple black
                 setStroke(dpToPx(1), Color.parseColor("#333333")) // Subtle rim
             }
             background = shape
-            elevation = dpToPx(14).toFloat()
+            elevation = dpToPx(12).toFloat()
             visibility = View.VISIBLE
             alpha = 1f
         }
@@ -345,9 +344,10 @@ class NotchFloatingBarManager(
         leftWing.addView(icon)
         pill.addView(leftWing)
 
-        // 3. CENTER HARDWARE CUTOUT CLEARANCE GAP
+        // 3. CENTER HARDWARE CUTOUT CLEARANCE GAP (Kept hidden to maintain solid compact pill)
         val centerSpacer = View(ctx).apply {
-            layoutParams = LinearLayout.LayoutParams(dpToPx(config.cutoutGapWidth), dpToPx(24))
+            layoutParams = LinearLayout.LayoutParams(0, dpToPx(20))
+            visibility = View.GONE
         }
         centerSpacerView = centerSpacer
         pill.addView(centerSpacer)
@@ -356,6 +356,13 @@ class NotchFloatingBarManager(
         val rightWing = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                leftMargin = dpToPx(6)
+            }
+            layoutParams = lp
         }
         rightWingView = rightWing
 
@@ -370,7 +377,7 @@ class NotchFloatingBarManager(
         rightWing.addView(countText)
 
         val dot = View(ctx).apply {
-            val dotLp = LinearLayout.LayoutParams(dpToPx(6), dpToPx(6)).apply {
+            val dotLp = LinearLayout.LayoutParams(dpToPx(7), dpToPx(7)).apply {
                 leftMargin = dpToPx(5)
             }
             layoutParams = dotLp
@@ -427,19 +434,23 @@ class NotchFloatingBarManager(
     }
 
     private fun applyConfigUpdate(offsetX: Int, offsetY: Int, cutoutGapWidth: Int) {
-        // Update center spacer gap to wrap hardware notch
+        val config = ScrollyApp.instance.notchSettingsRepository.configFlow.value
+
+        // Center spacer gap is kept collapsed (0 width, GONE) to enforce compact pill
         centerSpacerView?.let { spacer ->
             val lp = spacer.layoutParams
-            lp.width = dpToPx(cutoutGapWidth)
+            lp.width = 0
             spacer.layoutParams = lp
+            spacer.visibility = View.GONE
         }
 
-        // Reposition overlay on WindowManager
+        // Reposition overlay on WindowManager safely below punch hole
         if (isWindowAttached && rootView != null && rootView?.isAttachedToWindow == true) {
             try {
                 val params = rootView?.layoutParams as? WindowManager.LayoutParams ?: createLayoutParams()
                 params.x = dpToPx(offsetX)
-                params.y = dpToPx(offsetY)
+                val safeY = if (offsetY <= 0 && config.placementMode == IslandPlacementMode.BELOW_NOTCH) 38 else offsetY
+                params.y = dpToPx(safeY)
                 windowManager.updateViewLayout(rootView, params)
             } catch (e: Exception) {
                 Log.w(TAG, "Error updating window layout params", e)
