@@ -1,40 +1,19 @@
-# Gradle / Android Studio
 *.iml
 .gradle
 .kotlin
 /local.properties
-local.properties
 /.idea/caches
 /.idea/libraries
 /.idea/modules.xml
 /.idea/workspace.xml
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
-.gradle/gradle-daemon-jvm.properties
-
-# Build output
+.DS_Store
 /build
-/app/build
 /captures
 .externalNativeBuild
 .cxx
-
-# Build artifacts must never be committed: a debug APK is ~28 MB and a release one is
-# signed, so committing either bloats the repository and leaks a usable binary.
-*.apk
-*.aab
-*.ap_
-*.dex
-*.class
-*.jar
-!gradle/wrapper/gradle-wrapper.jar
-
-# Secrets
+local.properties
 .env
 debug.keystore
-*.jks
 google-services.json
-
-# OS
-.DS_Store
-Thumbs.db

@@ -1,5 +1,4 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
-import org.gradle.api.tasks.testing.Test
 
 plugins {
   alias(libs.plugins.android.application)
@@ -64,22 +63,11 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions {
-    unitTests {
-      isIncludeAndroidResources = true
-    }
-  }
+  testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
   }
-}
-
-// Robolectric can only initialise its native graphics runtime once per JVM, so Roborazzi
-// screenshot tests collide with the rest of the suite (FileSystemAlreadyExistsException).
-// One fork per test class gives every class a fresh runtime.
-tasks.withType<Test>().configureEach {
-  setForkEvery(1L)
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
@@ -141,7 +129,6 @@ dependencies {
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
-  testImplementation(libs.androidx.room.testing)
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
@@ -157,12 +144,4 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
-}
-
-// Export Room's schema JSON so future entity changes get a checked-in, reviewable
-// migration source instead of relying on `fallbackToDestructiveMigration` (which would
-// silently erase a user's entire scroll history on upgrade).
-ksp {
-    arg("room.schemaLocation", "$projectDir/schemas")
-    arg("room.incremental", "true")
 }

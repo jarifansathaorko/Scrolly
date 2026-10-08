@@ -225,14 +225,6 @@ object DisplayCutoutDetectionService {
 
     // ── Fallback ──────────────────────────────────────────────────────────
 
-    /**
-     * Status-bar-derived estimate used when no hardware cutout can be read.
-     *
-     * Public so callers that already hold a [DisplayCutout] reference can still fall back
-     * safely on API levels below 28, where the cutout classes do not exist.
-     */
-    fun fallbackCutout(context: Context): HardwareCutoutInfo = getStatusBarFallback(context)
-
     private fun getStatusBarFallback(context: Context): HardwareCutoutInfo {
         val density    = context.resources.displayMetrics.density
         val resId      = context.resources.getIdentifier("status_bar_height", "dimen", "android")

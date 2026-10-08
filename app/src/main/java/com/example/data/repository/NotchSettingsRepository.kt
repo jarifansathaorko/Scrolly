@@ -294,6 +294,13 @@ class NotchSettingsRepository(context: Context) {
         val gapWidth: Int
     )
 
+    /**
+     * Finds device hardware notch and automatically adjusts dynamic bar directly over the notch area.
+     */
+    fun findAndAdjustOverNotch(cutout: HardwareCutoutInfo) {
+        autoCalibrateWithCutout(cutout)
+    }
+
     fun setPlacementMode(mode: IslandPlacementMode) {
         val current = _configFlow.value
         val newY = if (mode == IslandPlacementMode.WRAP_AROUND_NOTCH) {

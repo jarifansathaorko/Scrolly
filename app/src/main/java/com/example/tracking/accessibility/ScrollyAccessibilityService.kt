@@ -2,6 +2,8 @@ package com.example.tracking.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import com.example.ScrollyApp
@@ -19,11 +21,13 @@ import kotlinx.coroutines.launch
 /**
  * ScrollyAccessibilityService
  *
- *  1. Tracks the foreground package via [foregroundPackageFlow] for debug UI.
- *  2. Force-hides the overlay whenever a non-social app moves to the foreground, so the
- *     counter can never linger on the home screen or another app.
+ * Central AccessibilityService that:
+ *  1. Tracks the real-time foreground package via a [foregroundPackageFlow] StateFlow.
+ *  2. Immediately force-hides the overlay whenever a non-social app moves to the foreground,
+ *     preventing the counter from persisting on the home screen or other apps.
  *  3. Delegates scroll/reel detection to [ScrollDetectionEngine].
- *  4. Owns the [NotchFloatingBarManager] lifecycle.
+ *  4. Manages [NotchFloatingBarManager] lifecycle and visibility.
+ *  5. Emits structured Logcat entries on every window transition for debugging.
  */
 class ScrollyAccessibilityService : AccessibilityService() {
 
@@ -33,35 +37,20 @@ class ScrollyAccessibilityService : AccessibilityService() {
         private val _isServiceActive = MutableStateFlow(false)
         val isServiceActive = _isServiceActive.asStateFlow()
 
-        /** Foreground package in real time, for observers such as the debug UI. */
+        /** Exposes the foreground package name in real-time for observers (e.g. debug UI). */
         private val _foregroundPackageFlow = MutableStateFlow("")
         val foregroundPackageFlow = _foregroundPackageFlow.asStateFlow()
 
-        /** Current window class for real-time debugging. */
+        /** Current window title / activity class for real-time debugging. */
         private val _windowTitleFlow = MutableStateFlow("")
         val windowTitleFlow = _windowTitleFlow.asStateFlow()
 
         var activeServiceInstance: ScrollyAccessibilityService? = null
             private set
-
-        /**
-         * Packages that appear in the window event stream but must never trigger a
-         * counter change: status bar, IME, GMS, Play Store and Scrolly itself.
-         *
-         * Kept as a set so the lookup is O(1) on a hot path. [ScrollDetectionEngine]
-         * filters the same set internally for its own state machine.
-         */
-        private val IGNORED_UI_PACKAGES = setOf(
-            "android",
-            "com.android.systemui",
-            "com.google.android.gms",
-            "com.google.android.webview",
-            "com.android.vending"
-        )
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val mainHandler   = Handler(Looper.getMainLooper())
     private var notchFloatingBarManager: NotchFloatingBarManager? = null
     private var scrollDetectionEngine: ScrollDetectionEngine? = null
 
@@ -72,8 +61,8 @@ class ScrollyAccessibilityService : AccessibilityService() {
     override fun onCreate() {
         super.onCreate()
         _isServiceActive.value = true
-        activeServiceInstance = this
-        Log.i(TAG, "[SERVICE] onCreate")
+        activeServiceInstance  = this
+        Log.i(TAG, "[SERVICE] onCreate — Scrolly AccessibilityService starting")
 
         try {
             notchFloatingBarManager = NotchFloatingBarManager(this)
@@ -83,16 +72,18 @@ class ScrollyAccessibilityService : AccessibilityService() {
 
         scrollDetectionEngine = ScrollDetectionEngine(
             service = this,
-            onScrollDetected = { pkg, appName -> incrementCount(pkg, appName) },
+            onScrollDetected = { pkg, appName ->
+                incrementCount(pkg, appName)
+            },
             onReelVisibilityChanged = { pkg, appName, isWatchingReels ->
                 mainHandler.post {
                     if (isWatchingReels) {
                         val count = ScrollyApp.instance.trackingRepository.todayTotalScrolls.value
                         notchFloatingBarManager?.attachWindowIfNeeded()
                         notchFloatingBarManager?.show(appName, count)
-                        Log.d(TAG, "[OVERLAY] show pkg=$pkg app=$appName count=$count")
+                        Log.d(TAG, "[OVERLAY] show — pkg=$pkg  app=$appName  count=$count")
                     } else {
-                        Log.d(TAG, "[OVERLAY] hide pkg=$pkg app=$appName")
+                        Log.d(TAG, "[OVERLAY] hide — pkg=$pkg  app=$appName")
                         notchFloatingBarManager?.forceHide()
                     }
                 }
@@ -102,14 +93,14 @@ class ScrollyAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        Log.i(TAG, "[SERVICE] onServiceConnected")
+        Log.i(TAG, "[SERVICE] onServiceConnected — configuring event types")
         try {
-            serviceInfo = AccessibilityServiceInfo().apply {
+            val info = AccessibilityServiceInfo().apply {
                 eventTypes =
-                    AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                    AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED   or
                     AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                    AccessibilityEvent.TYPE_WINDOWS_CHANGED or
-                    AccessibilityEvent.TYPE_VIEW_SCROLLED or
+                    AccessibilityEvent.TYPE_WINDOWS_CHANGED        or
+                    AccessibilityEvent.TYPE_VIEW_SCROLLED          or
                     AccessibilityEvent.TYPE_VIEW_CLICKED
                 feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
                 flags =
@@ -117,6 +108,7 @@ class ScrollyAccessibilityService : AccessibilityService() {
                     AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
                 notificationTimeout = 100
             }
+            this.serviceInfo = info
         } catch (e: Exception) {
             Log.w(TAG, "[SERVICE] Could not configure serviceInfo", e)
         }
@@ -126,91 +118,85 @@ class ScrollyAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
 
+        // ── Real-time window tracking + immediate overlay guard ────────────
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val pkg = event.packageName?.toString().orEmpty()
-            val className = event.className?.toString().orEmpty()
-            val title = event.text.firstOrNull()?.toString().orEmpty()
+            val pkg        = event.packageName?.toString() ?: ""
+            val className  = event.className?.toString() ?: ""
+            val title      = event.text.firstOrNull()?.toString() ?: ""
 
-            if (pkg != _foregroundPackageFlow.value) {
-                _foregroundPackageFlow.value = pkg
-            }
-            _windowTitleFlow.value = "$pkg / $className"
+            _foregroundPackageFlow.value = pkg
+            _windowTitleFlow.value       = "$pkg / $className"
 
             Log.d(
                 TAG,
-                "[WINDOW] pkg=$pkg class=$className title=\"$title\" " +
-                    "supported=${AppRecognitionEngine.isSupported(pkg)}"
+                "[WINDOW] pkg=$pkg  class=$className  title=\"$title\"  " +
+                "supported=${AppRecognitionEngine.isSupported(pkg)}"
             )
 
-            // Non-social foreground: hide immediately rather than waiting for the
-            // detector's own window evaluation.
-            if (pkg.isNotEmpty() && !AppRecognitionEngine.isSupported(pkg) && !isIgnoredUiPackage(pkg)) {
+            // If the foreground app is NOT a tracked social app, immediately force-hide
+            if (!AppRecognitionEngine.isSupported(pkg) &&
+                pkg.isNotEmpty() &&
+                !isIgnoredUiPackage(pkg)
+            ) {
                 mainHandler.post {
                     if (notchFloatingBarManager?.isReelActive == true) {
-                        Log.d(TAG, "[OVERLAY] force-hide: non-social foreground $pkg")
+                        Log.d(TAG, "[OVERLAY] force-hide — non-social foreground: $pkg")
                         notchFloatingBarManager?.forceHide()
                     }
                 }
             }
         }
 
+        // Delegate all event processing to the detection engine
         scrollDetectionEngine?.processAccessibilityEvent(event)
     }
 
     override fun onInterrupt() {
-        Log.w(TAG, "[SERVICE] onInterrupt")
+        Log.w(TAG, "[SERVICE] onInterrupt — forcing overlay hide")
         mainHandler.post { notchFloatingBarManager?.forceHide() }
         scrollDetectionEngine?.resetState()
     }
 
-    override fun onUnbind(intent: android.content.Intent?): Boolean {
-        Log.i(TAG, "[SERVICE] onUnbind")
-        teardown()
-        return super.onUnbind(intent)
-    }
-
     override fun onDestroy() {
         super.onDestroy()
-        Log.i(TAG, "[SERVICE] onDestroy")
-        teardown()
-    }
-
-    private fun teardown() {
+        Log.i(TAG, "[SERVICE] onDestroy — tearing down Scrolly service")
         _isServiceActive.value = false
-        if (activeServiceInstance === this) activeServiceInstance = null
+        activeServiceInstance  = null
         scrollDetectionEngine?.resetState()
-        scrollDetectionEngine = null
+        scrollDetectionEngine  = null
         notchFloatingBarManager?.onDestroy()
         notchFloatingBarManager = null
         serviceScope.cancel()
     }
 
-    // ── Scroll recording ───────────────────────────────────────────────────
+    // ── Private helpers ────────────────────────────────────────────────────
 
-    /**
-     * Records a scroll and refreshes the overlay.
-     *
-     * The overlay is driven purely by [com.example.data.repository.TrackingRepository]'s
-     * optimistic counter rather than by a locally computed `value + 1`. The old code read
-     * `todayTotalScrolls.value + 1` on the accessibility thread and pushed that straight
-     * to the overlay, which could overwrite a *newer* real value with a stale one whenever
-     * two scrolls landed in quick succession and make the counter skip or jump backwards.
-     * Since the repository already publishes an immediate optimistic total, reading it
-     * here is both simpler and race-free.
-     */
     private fun incrementCount(pkg: String, appName: String) {
+        val optimisticCount = ScrollyApp.instance.trackingRepository.todayTotalScrolls.value + 1
+        mainHandler.post {
+            notchFloatingBarManager?.updateCount(optimisticCount, appName)
+        }
         serviceScope.launch {
             try {
                 ScrollyApp.instance.trackingRepository.recordScroll(pkg, appName, 1)
-                val count = ScrollyApp.instance.trackingRepository.todayTotalScrolls.value
-                mainHandler.post { notchFloatingBarManager?.updateCount(count, appName) }
             } catch (e: Exception) {
                 Log.e(TAG, "[SERVICE] Error recording scroll event", e)
             }
         }
     }
 
-    /** True for system UI packages that must not affect the counter. */
-    private fun isIgnoredUiPackage(pkg: String): Boolean =
-        pkg == packageName || IGNORED_UI_PACKAGES.any { pkg == it || pkg.startsWith(it) }
+    /**
+     * Returns true for system UI packages that appear in the window event stream but
+     * should NOT trigger an overlay hide (e.g. status bar, IME, permission dialogs).
+     */
+    private fun isIgnoredUiPackage(pkg: String): Boolean {
+        return pkg == "android" ||
+               pkg.startsWith("com.android.systemui") ||
+               pkg.contains("inputmethod") ||
+               pkg.contains("keyboard") ||
+               pkg == "com.google.android.gms" ||
+               pkg == "com.google.android.webview" ||
+               pkg == "com.android.vending" ||
+               pkg == packageName // our own package
+    }
 }

@@ -2,8 +2,8 @@ package com.example.ui.navigation
 
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.screens.battles.BattlesScreen
 import com.example.ui.screens.battles.BattlesViewModel
 import com.example.ui.screens.block.BlockScreen
@@ -70,124 +71,87 @@ enum class ScrollyTab(
 fun ScrollyAppScaffold() {
     var selectedTab by rememberSaveable { mutableStateOf(ScrollyTab.HOME) }
 
-    // Only the visible tab's ViewModel is created. The previous version instantiated all
-    // five up front, so every screen's repository flows and permission queries ran even
-    // when their tab was never opened.
+    val homeViewModel: HomeViewModel = viewModel()
+    val statsViewModel: StatsViewModel = viewModel()
+    val battlesViewModel: BattlesViewModel = viewModel()
+    val blockViewModel: BlockViewModel = viewModel()
+    val profileViewModel: ProfileViewModel = viewModel()
+
+    val isNotchPreviewVisible by homeViewModel.isNotchBarPreviewVisible.collectAsStateWithLifecycle()
+    val notchConfig by homeViewModel.notchConfig.collectAsStateWithLifecycle()
+    val liveTotalScrolls by homeViewModel.liveTotalScrolls.collectAsStateWithLifecycle()
+    val todayStats by homeViewModel.todayStats.collectAsStateWithLifecycle()
+    val totalScrolls = if (liveTotalScrolls > 0) liveTotalScrolls else (todayStats?.totalScrolls ?: 0)
+
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             containerColor = SleekBg,
             bottomBar = {
-                // No navigationBarsPadding() here: the Scaffold already applies the bottom
-                // system-bar inset, and doing both doubled the gap above the bar.
-                NavigationBar(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
-                        .border(1.dp, SleekBorder, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)),
-                    containerColor = SleekCardSurface,
-                    tonalElevation = 0.dp
-                ) {
-                    ScrollyTab.entries.forEach { tab ->
-                        val isSelected = selectedTab == tab
-                        NavigationBarItem(
-                            selected = isSelected,
-                            onClick = { selectedTab = tab },
-                            icon = {
-                                Icon(
-                                    imageVector = if (isSelected) tab.selectedIcon else tab.unselectedIcon,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = tab.title,
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontSize = 11.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                    )
-                                )
-                            },
-                            alwaysShowLabel = true,
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = SleekPillText,
-                                selectedTextColor = SleekPillText,
-                                indicatorColor = SleekPillBg,
-                                unselectedIconColor = SleekTextMuted,
-                                unselectedTextColor = SleekTextMuted
+            NavigationBar(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+                    .border(1.dp, SleekBorder, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+                    .navigationBarsPadding(),
+                containerColor = SleekCardSurface,
+                tonalElevation = 0.dp
+            ) {
+                ScrollyTab.entries.forEach { tab ->
+                    val isSelected = selectedTab == tab
+                    NavigationBarItem(
+                        selected = isSelected,
+                        onClick = { selectedTab = tab },
+                        icon = {
+                            Icon(
+                                imageVector = if (isSelected) tab.selectedIcon else tab.unselectedIcon,
+                                contentDescription = tab.title,
+                                modifier = Modifier.size(22.dp)
                             )
+                        },
+                        label = {
+                            Text(
+                                text = tab.title,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                )
+                            )
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = SleekPillText,
+                            selectedTextColor = SleekPillText,
+                            indicatorColor = SleekPillBg,
+                            unselectedIconColor = SleekTextMuted,
+                            unselectedTextColor = SleekTextMuted
                         )
-                    }
+                    )
                 }
             }
-        ) { innerPadding ->
+        }
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
             when (selectedTab) {
-                ScrollyTab.HOME -> HomeTab(innerPadding)
-                ScrollyTab.STATS -> StatsTab(innerPadding)
-                ScrollyTab.BATTLES -> BattlesTab(innerPadding)
-                ScrollyTab.BLOCK -> BlockTab(innerPadding)
-                ScrollyTab.PROFILE -> ProfileTab(innerPadding)
+                ScrollyTab.HOME -> HomeScreen(viewModel = homeViewModel)
+                ScrollyTab.STATS -> StatsScreen(viewModel = statsViewModel)
+                ScrollyTab.BATTLES -> BattlesScreen(viewModel = battlesViewModel)
+                ScrollyTab.BLOCK -> BlockScreen(viewModel = blockViewModel)
+                ScrollyTab.PROFILE -> ProfileScreen(viewModel = profileViewModel)
             }
         }
     }
-}
 
-@Composable
-private fun HomeTab(innerPadding: PaddingValues) {
-    val viewModel: HomeViewModel = viewModel()
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(innerPadding)
-    ) {
-        HomeScreen(viewModel = viewModel)
-    }
+    // Dynamic Island Preview rendered at absolute screen coordinates (0 = top of display)
+    com.example.ui.components.NotchBarPreview(
+        scrollCount = totalScrolls,
+        appName = "Reels",
+        dailyGoal = todayStats?.goal ?: 100,
+        visible = isNotchPreviewVisible,
+        config = notchConfig,
+        onDismiss = { homeViewModel.setNotchBarPreviewVisible(false) }
+    )
 }
-
-@Composable
-private fun StatsTab(innerPadding: PaddingValues) {
-    val viewModel: StatsViewModel = viewModel()
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(innerPadding)
-    ) {
-        StatsScreen(viewModel = viewModel)
-    }
-}
-
-@Composable
-private fun BattlesTab(innerPadding: PaddingValues) {
-    val viewModel: BattlesViewModel = viewModel()
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(innerPadding)
-    ) {
-        BattlesScreen(viewModel = viewModel)
-    }
-}
-
-@Composable
-private fun BlockTab(innerPadding: PaddingValues) {
-    val viewModel: BlockViewModel = viewModel()
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(innerPadding)
-    ) {
-        BlockScreen(viewModel = viewModel)
-    }
-}
-
-@Composable
-private fun ProfileTab(innerPadding: PaddingValues) {
-    val viewModel: ProfileViewModel = viewModel()
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(innerPadding)
-    ) {
-        ProfileScreen(viewModel = viewModel)
-    }
 }

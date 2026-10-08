@@ -62,9 +62,6 @@ class NotchFloatingBarManager(
 ) {
     companion object {
         private const val TAG = "NotchFloatingBar"
-
-        /** Lowest Y the overlay may occupy, in dp, regardless of user configuration. */
-        private const val MIN_OVERLAY_Y_DP = 28
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -196,13 +193,7 @@ class NotchFloatingBarManager(
 
     /**
      * Hides the Dynamic Island with an optional fade-out animation.
-     * @param immediate skip the exit animation and detach right away.
-     * @param keepAttached leave the WindowManager entry in place (hidden) so the next
-     *   [show] is instant. The window is always eventually detached.
-     *
-     * The previous version ignored [keepAttached] entirely, and in the animated path
-     * called `detachWindow()` from inside the animation callback, so when the
-     * controller was absent the window was never detached and leaked a live overlay.
+     * When [keepAttached] is false, the window is removed from WindowManager immediately.
      */
     fun hide(immediate: Boolean = false, keepAttached: Boolean = false) {
         isReelActive = false
@@ -213,16 +204,8 @@ class NotchFloatingBarManager(
                 pillContainer?.visibility = View.GONE
                 detachWindow()
             } else {
-                val controller = animationController
-                if (controller == null) {
-                    // Nothing can run the exit animation, so clean up directly; otherwise
-                    // the window stays attached forever with no way to hide it.
-                    pillContainer?.visibility = View.GONE
-                    detachWindow()
-                } else {
-                    controller.animateExit {
-                        if (!isReelActive && !keepAttached) detachWindow()
-                    }
+                animationController?.animateExit {
+                    if (!isReelActive) detachWindow()
                 }
             }
         }
@@ -364,15 +347,10 @@ class NotchFloatingBarManager(
     /**
      * Resolves the overlay's (x, y) pixel position based on notch shape and placement mode.
      *
-     * For WRAP_AROUND_NOTCH (punch-hole centre): `y` = cutout top in px, so the pill sits
-     * vertically level with the camera.
-     *
-     * For BELOW_NOTCH: `y` is clamped to *at least* the hardware safe inset so the pill
-     * can never sit under the status bar or camera. The previous code took the raw
-     * `offsetY` whenever it was greater than zero, which bypassed the safe-inset
-     * calculation entirely. Because auto-calibration always produces a positive offsetY,
-     * the safe-inset branch was effectively dead and devices with a tall status bar showed
-     * the counter underneath it.
+     * For WRAP_AROUND_NOTCH (punch-hole center):
+     *   y = cutout top in px, so the pill's vertical center aligns with the camera
+     * For BELOW_NOTCH:
+     *   y = safeInsetTop in px + small gap, so text is never under the camera
      */
     private fun resolveOverlayPosition(
         mode: IslandPlacementMode,
@@ -385,21 +363,21 @@ class NotchFloatingBarManager(
 
         val x: Int = dpToPx(offsetXDp)
 
-        // Hardware guarantee: never above the camera cutout / status bar.
-        val minimumSafeY = dpToPx(
-            (maxOf(cutout.safeInsetTop, cutout.bottom)).coerceAtLeast(MIN_OVERLAY_Y_DP)
-        )
-
         val y: Int = when (mode) {
             IslandPlacementMode.WRAP_AROUND_NOTCH -> {
-                // Align the pill with the notch top edge in screen-pixel coordinates.
-                (dpToPx(cutout.top)).coerceAtLeast(0)
+                // Align the pill with the notch top edge in screen-pixel coordinates
+                // The pill is centered on the notch's vertical midpoint
+                val notchTopPx = (cutout.top * density).toInt()
+                notchTopPx.coerceAtLeast(0)
             }
             IslandPlacementMode.BELOW_NOTCH -> {
-                val requested = if (offsetYDp > 0) dpToPx(offsetYDp) else minimumSafeY + dpToPx(4)
-                // A manual nudge may only move the pill down past the safe line, never up
-                // into the status bar.
-                requested.coerceAtLeast(minimumSafeY)
+                if (offsetYDp > 0) {
+                    dpToPx(offsetYDp)
+                } else {
+                    // Derive from safeInsetTop: guaranteed below camera + status bar
+                    val safePx = (cutout.safeInsetTop * density).toInt()
+                    (safePx + dpToPx(4)).coerceAtLeast(dpToPx(28))
+                }
             }
         }
 
