@@ -122,7 +122,7 @@ class ScrollDetectionEngine(
 
             val appName = AppRecognitionEngine.getAppName(eventPkg)
             currentPackage = eventPkg
-            evaluateScreenContext(eventPkg, appName, event, force = true)
+            evaluateScreenContext(eventPkg, appName, event)
             return
         }
 
@@ -153,7 +153,7 @@ class ScrollDetectionEngine(
             event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
             val now = System.currentTimeMillis()
             if (now - lastEvalTimestamp >= THROTTLE_EVAL_MS) {
-                evaluateScreenContext(eventPkg, appName, event, force = false)
+                evaluateScreenContext(eventPkg, appName, event)
             } else {
                 scheduleEvaluation(eventPkg, appName)
             }
@@ -162,17 +162,22 @@ class ScrollDetectionEngine(
 
     /**
      * Resets all tracking state — call this on service interrupt or destroy.
+     *
+     * Emits at most one hide callback even if the reel was active, then clears every
+     * counter so a restarted service starts from a clean slate.
      */
     fun resetState() {
         pendingEvalRunnable?.let { handler.removeCallbacks(it) }
         pendingEvalRunnable = null
+
+        val pkg = currentPackage ?: ""
         if (isCurrentlyWatchingReels) {
-            val pkg = currentPackage ?: ""
             Log.d(TAG, "[RESET] Forcing reel-inactive due to resetState() for pkg=$pkg")
-            isCurrentlyWatchingReels = false
-            cachedIsReelContext = false
+            // Only emit once: the previous version could fire the callback from inside the
+            // `if` *and* again from the unconditional block below.
             onReelVisibilityChanged?.invoke(pkg, "", false)
         }
+
         isCurrentlyWatchingReels = false
         cachedIsReelContext = false
         currentPackage = null
@@ -334,6 +339,24 @@ class ScrollDetectionEngine(
     }
 
     /**
+     * View-ID fragments that only ever appear on Instagram's *comment sheet* structure.
+     *
+     * Substring matching is unavoidable for view IDs, so the list is restricted to
+     * sheet-specific tokens. Instagram's ordinary Reel chrome uses generic IDs such as
+     * `row_comment_text` and `button_comment`, which must never match here — matching
+     * them would silently stop every genuine reel swipe from being counted, which is a
+     * far worse failure than the occasional missed comment scroll.
+     */
+    private val instagramCommentSheetViewIds = listOf(
+        "comment_bottom_sheet",
+        "comments_fragment",
+        "comments_recycler_view",
+        "igds_bottom_sheet_root",
+        "comment_row_message",
+        "comment_text_input"
+    )
+
+    /**
      * Returns true when a scroll event source belongs to Instagram's comment-sheet
      * hierarchy. This walks from the source toward the root rather than searching the
      * entire active window, which keeps the hot scroll path both fast and reliable.
@@ -347,20 +370,27 @@ class ScrollDetectionEngine(
         try {
             repeat(MAX_COMMENT_CONTAINER_ANCESTOR_DEPTH) {
                 val current = node ?: return false
-                val viewId = current.viewIdResourceName?.lowercase() ?: ""
-                val className = current.className?.toString()?.lowercase() ?: ""
-                val contentDescription = current.contentDescription?.toString()?.lowercase() ?: ""
 
-                val isCommentContainer = viewId.contains("comment_bottom_sheet") ||
-                        viewId.contains("comments_recycler_view") ||
-                        viewId.contains("igds_bottom_sheet_root") ||
-                        viewId.contains("comments_fragment") ||
-                        viewId.contains("comment_text_input") ||
-                        className.contains("comment") ||
-                        className.contains("bottomsheet") ||
-                        contentDescription.contains("comments")
+                val viewId = current.viewIdResourceName?.lowercase().orEmpty()
+                val className = current.className?.toString()?.lowercase().orEmpty()
+                val contentDescription = current.contentDescription?.toString()?.lowercase().orEmpty()
 
-                if (isCommentContainer) return true
+                val matchesSheetViewId = instagramCommentSheetViewIds.any { viewId.contains(it) }
+
+                // `comment_bottom_sheet` / `igds_bottom_sheet_root` are sheet classes.
+                // A class merely containing "comment" is NOT enough: Instagram names its
+                // ordinary Reel comment button `CommentButton`, and treating that as the
+                // sheet would reject legitimate reel swipes.
+                val matchesSheetClass = className.contains("comment_bottom_sheet") ||
+                        className.contains("igds_bottom_sheet") ||
+                        className.contains("comments_fragment")
+
+                // "Comments" (plural) in a container description only appears once the
+                // sheet is showing; the singular Reel button reads "Comment".
+                val matchesSheetLabel = contentDescription.contains("comments") &&
+                        !contentDescription.contains("comment,")
+
+                if (matchesSheetViewId || matchesSheetClass || matchesSheetLabel) return true
 
                 val parent = try {
                     current.parent
@@ -370,6 +400,7 @@ class ScrollDetectionEngine(
                 try {
                     current.recycle()
                 } catch (_: Exception) {
+                    // Already recycled / detached; nothing to do.
                 }
                 node = parent
                 if (node == null) return false
@@ -379,41 +410,50 @@ class ScrollDetectionEngine(
             try {
                 node?.recycle()
             } catch (_: Exception) {
+                // Best-effort cleanup; a leaked node here is not fatal.
             }
         }
     }
 
-    private fun isStrictlyVerticalScroll(event: AccessibilityEvent): Boolean {
+    /**
+ * Rejects horizontal swipes (carousel rows, tab strips) so only vertical reel paging
+ * is counted.
+ *
+ * `AccessibilityEvent.scrollDeltaY` is only meaningful when the source reports an actual
+ * delta, signalled by `scrollDeltaX == -1 && scrollDeltaY == -1`. When deltas *are*
+ * present, direction is taken from their magnitude rather than their sign, because the
+ * documented sign convention is inverted between OEMs and feed implementations — relying
+ * on `deltaY < 0` previously discarded most real reel swipes. Only a clearly dominant
+ * horizontal component is rejected.
+ */
+private fun isStrictlyVerticalScroll(event: AccessibilityEvent): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val deltaX = event.scrollDeltaX
             val deltaY = event.scrollDeltaY
 
-            if (deltaX != -1 && deltaY != -1) {
-                if (deltaX != 0 && deltaY == 0) return false
-                if (abs(deltaX) > abs(deltaY) && abs(deltaX) > 2) return false
-                if (deltaY > 0) return true
-                if (deltaY < 0) return false
+            // Both -1 means "no reliable delta reported"; fall through to heuristics.
+            if (deltaX != -1 || deltaY != -1) {
+                val absX = abs(deltaX)
+                val absY = abs(deltaY)
+                if (absY > absX) return true
+                if (absX > absY) return false
             }
         }
 
-        val className = event.className?.toString()?.lowercase() ?: ""
-        if (className.contains("horizontal") ||
-            className.contains("tablayout") ||
-            className.contains("tabbar") ||
-            className.contains("carousel") ||
-            className.contains("storytray")
-        ) {
-            return false
-        }
-
-        return true
+        val className = event.className?.toString()?.lowercase().orEmpty()
+        return !(
+            className.contains("horizontal") ||
+                className.contains("tablayout") ||
+                className.contains("tabbar") ||
+                className.contains("carousel") ||
+                className.contains("storytray")
+            )
     }
 
     private fun evaluateScreenContext(
         packageName: String,
         appName: String,
-        event: AccessibilityEvent,
-        force: Boolean
+        event: AccessibilityEvent
     ) {
         val now = System.currentTimeMillis()
         lastEvalTimestamp = now

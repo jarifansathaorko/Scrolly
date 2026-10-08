@@ -12,9 +12,6 @@ import com.example.data.local.entity.AppStatsEntity
 import com.example.data.local.entity.DailyStatsEntity
 import com.example.data.local.entity.FriendBattleEntity
 import com.example.data.local.entity.ScrollEventEntity
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -29,218 +26,226 @@ import java.util.Locale
         AchievementEntity::class,
         FriendBattleEntity::class
     ],
-    version = 2,
-    exportSchema = false
+    version = ScrollyDatabase.VERSION,
+    exportSchema = true
 )
 abstract class ScrollyDatabase : RoomDatabase() {
     abstract fun scrollyDao(): ScrollyDao
 
     companion object {
+        const val VERSION = 3
+        private const val DB_NAME = "scrolly_database"
+
         @Volatile
         private var INSTANCE: ScrollyDatabase? = null
 
         fun getInstance(context: Context): ScrollyDatabase {
             return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
-                    context.applicationContext,
-                    ScrollyDatabase::class.java,
-                    "scrolly_database"
-                )
-                    .fallbackToDestructiveMigration()
-                    .addCallback(DatabaseCallback())
-                    .build()
-                INSTANCE = instance
-                instance
+                INSTANCE ?: build(context.applicationContext).also { INSTANCE = it }
             }
         }
 
-        fun getTodayDate(): String {
-            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            return sdf.format(Date())
+        private fun build(context: Context): ScrollyDatabase =
+            Room.databaseBuilder(context, ScrollyDatabase::class.java, DB_NAME)
+                // Explicit migration, NOT destructive fallback: this is a wellbeing
+                // tracker and a user's scroll history is the entire product. Silently
+                // wiping it on a schema bump is unacceptable, so adding an entity field
+                // now costs a migration instead of data loss.
+                .addMigrations(MIGRATION_2_3)
+                .addCallback(SeedCallback)
+                .build()
+
+        /**
+         * v2 → v3: give `app_stats` its natural `(date, packageName)` primary key.
+         *
+         * v2 used a surrogate `id`, so nothing stopped two rows existing for the same
+         * app/day and `getAppStat` returned an arbitrary one. This collapses any
+         * pre-existing duplicates (keeping the largest count) and rebuilds the table
+         * with the composite key the DAO's `ON CONFLICT` upserts rely on.
+         */
+        val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS app_stats_new (
+                        date TEXT NOT NULL,
+                        packageName TEXT NOT NULL,
+                        appName TEXT NOT NULL,
+                        scrollCount INTEGER NOT NULL,
+                        PRIMARY KEY (date, packageName)
+                    )
+                    """.trimIndent()
+                )
+
+                // Collapse duplicates, summing counts so no scroll is lost in the fix.
+                db.execSQL(
+                    """
+                    INSERT OR REPLACE INTO app_stats_new (date, packageName, appName, scrollCount)
+                    SELECT date, packageName, MAX(appName), SUM(scrollCount)
+                    FROM app_stats
+                    GROUP BY date, packageName
+                    """.trimIndent()
+                )
+
+                db.execSQL("DROP TABLE app_stats")
+                db.execSQL("ALTER TABLE app_stats_new RENAME TO app_stats")
+            }
         }
+
+        // ── Date helpers ───────────────────────────────────────────────────
+
+        fun getTodayDate(): String = dateFormat("yyyy-MM-dd").format(Date())
 
         fun getDateOffset(daysOffset: Int): String {
             val cal = Calendar.getInstance()
             cal.add(Calendar.DAY_OF_YEAR, daysOffset)
-            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            return sdf.format(cal.time)
+            return dateFormat("yyyy-MM-dd").format(cal.time)
         }
 
         fun getMonthPrefix(offsetMonths: Int = 0): String {
             val cal = Calendar.getInstance()
             cal.add(Calendar.MONTH, offsetMonths)
-            val sdf = SimpleDateFormat("yyyy-MM", Locale.getDefault())
-            return sdf.format(cal.time)
+            return dateFormat("yyyy-MM").format(cal.time)
         }
 
         fun getYearPrefix(offsetYears: Int = 0): String {
             val cal = Calendar.getInstance()
             cal.add(Calendar.YEAR, offsetYears)
-            val sdf = SimpleDateFormat("yyyy", Locale.getDefault())
-            return sdf.format(cal.time)
+            return dateFormat("yyyy").format(cal.time)
         }
+
+        /**
+         * Exclusive start-of-day epoch millis for [date] (`yyyy-MM-dd`, local time).
+         *
+         * Callers use this to turn a stored date into a timestamp range for the raw
+         * event log, which stores absolute millis rather than a date string.
+         */
+        fun startOfDayMillis(date: String): Long {
+            val parsed = parseDate(date)
+            val cal = Calendar.getInstance()
+            if (parsed != null) {
+                cal.set(parsed[0], parsed[1] - 1, parsed[2], 0, 0, 0)
+                cal.set(Calendar.MILLISECOND, 0)
+            } else {
+                // Unparseable date: fall back to *today's* start rather than "now",
+                // so a bad input can never silently produce an empty range.
+                cal.set(Calendar.HOUR_OF_DAY, 0)
+                cal.set(Calendar.MINUTE, 0)
+                cal.set(Calendar.SECOND, 0)
+                cal.set(Calendar.MILLISECOND, 0)
+            }
+            return cal.timeInMillis
+        }
+
+        /** Exclusive end-of-day epoch millis for [date] (i.e. the start of the following day). */
+        fun endOfDayMillis(date: String): Long {
+            val parsed = parseDate(date)
+                // Derive tomorrow from the *given* date. Computing it from "now" instead
+                // returned the start of the next real day for every date, so querying a
+                // past day returned a range spanning two days and leaked today's events.
+                ?: return startOfDayMillis(date) + MILLIS_PER_DAY
+
+            return Calendar.getInstance().apply {
+                clear() // midnight, and DST-safe because we add a whole day afterwards
+                set(parsed[0], parsed[1] - 1, parsed[2])
+                add(Calendar.DAY_OF_YEAR, 1)
+            }.timeInMillis
+        }
+
+        private fun parseDate(date: String): IntArray? = try {
+            val parsed = dateFormat("yyyy-MM-dd").parse(date) ?: return null
+            val cal = Calendar.getInstance().apply { time = parsed }
+            intArrayOf(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH) + 1, cal.get(Calendar.DAY_OF_MONTH))
+        } catch (_: Exception) {
+            null
+        }
+
+        private fun dateFormat(pattern: String): SimpleDateFormat =
+            SimpleDateFormat(pattern, Locale.US)
+
+        private const val MILLIS_PER_DAY = 24L * 60L * 60L * 1000L
+
+        /** Daily allowance applied to newly-created days. */
+        const val DEFAULT_DAILY_GOAL = 100
+
+        // Seed data lives in the companion so the nested [SeedCallback] object — which
+        // has no enclosing instance — can still read it.
+        private val DEFAULT_LIMITS = listOf(
+            arrayOf<Any>("com.instagram.android", "Instagram", 100, 80),
+            arrayOf<Any>("com.google.android.youtube", "YouTube Shorts", 75, 60),
+            arrayOf<Any>("com.zhiliaoapp.musically", "TikTok", 80, 60),
+            arrayOf<Any>("com.facebook.katana", "Facebook", 60, 45),
+            arrayOf<Any>("com.snapchat.android", "Snapchat", 50, 35)
+        )
+
+        private val ACHIEVEMENTS = listOf(
+            arrayOf<Any>("first_step", "First Step", "Log your very first short-form scroll session", "flag", 1),
+            arrayOf<Any>("under_100", "Under 100", "Stay under 100 scrolls in a single day", "shield", 100),
+            arrayOf<Any>("streak_7", "7-Day Streak", "Maintain a 7-day streak under your daily limit", "fire", 7),
+            arrayOf<Any>("touch_grass", "Touch Grass Champion", "Keep daily scrolls below 30 on a weekend day", "grass", 30),
+            arrayOf<Any>("battle_winner", "Scroll Ninja", "Win a 1v1 Scroll Battle", "sword", 1),
+            arrayOf<Any>("zen_master", "Zen Master", "Complete 5 mindful focus breaks", "lotus", 5)
+        )
     }
 
-    private class DatabaseCallback : RoomDatabase.Callback() {
+    /**
+     * Seeds first-run data.
+     *
+     * Writes happen through raw SQL on the [SupportSQLiteDatabase] that Room supplies.
+     * The previous implementation launched a coroutine and looked up `INSTANCE?.dao()`,
+     * which raced with the very assignment that was still in flight — so on a fresh
+     * install the seed could silently no-op and leave the user with no app limits,
+     * no achievements and no battles. Running the inserts on the provided database
+     * keeps them inside Room's own create transaction: no race, no extra scope, no leak.
+     */
+    private object SeedCallback : RoomDatabase.Callback() {
+
         override fun onCreate(db: SupportSQLiteDatabase) {
             super.onCreate(db)
-            CoroutineScope(Dispatchers.IO).launch {
-                populateInitialData(INSTANCE?.scrollyDao())
+            val today = getTodayDate()
+
+            DEFAULT_LIMITS.forEach { (pkg, name, limit, warning) ->
+                db.execSQL(
+                    "INSERT OR REPLACE INTO app_limits " +
+                        "(packageName, appName, dailyLimit, warningThreshold, isBlocked, isEnabled) " +
+                        "VALUES (?, ?, ?, ?, 0, 1)",
+                    arrayOf<Any>(pkg, name, limit, warning)
+                )
+            }
+
+            ACHIEVEMENTS.forEach { a ->
+                db.execSQL(
+                    "INSERT OR REPLACE INTO achievements " +
+                        "(id, title, description, iconName, targetValue, currentValue, isUnlocked, unlockedAt) " +
+                        "VALUES (?, ?, ?, ?, ?, 0, 0, NULL)",
+                    arrayOf<Any>(a[0], a[1], a[2], a[3], a[4])
+                )
+            }
+
+            db.execSQL(
+                "INSERT OR REPLACE INTO daily_stats (date, totalScrolls, goal, isGoalMet, xpEarned) " +
+                    "VALUES (?, 0, ?, 0, 0)",
+                arrayOf<Any>(today, DEFAULT_DAILY_GOAL)
+            )
+
+            DEFAULT_LIMITS.forEach { (pkg, name, _, _) ->
+                db.execSQL(
+                    "INSERT OR REPLACE INTO app_stats (date, packageName, appName, scrollCount) " +
+                        "VALUES (?, ?, ?, 0)",
+                    arrayOf<Any>(today, pkg, name)
+                )
             }
         }
 
-        private suspend fun populateInitialData(dao: ScrollyDao?) {
-            dao ?: return
-
-            // 1. Prepopulate default App Limits
-            val defaultLimits = listOf(
-                AppLimitEntity(
-                    packageName = "com.instagram.android",
-                    appName = "Instagram",
-                    dailyLimit = 100,
-                    warningThreshold = 80,
-                    isBlocked = false,
-                    isEnabled = true
-                ),
-                AppLimitEntity(
-                    packageName = "com.google.android.youtube",
-                    appName = "YouTube Shorts",
-                    dailyLimit = 75,
-                    warningThreshold = 60,
-                    isBlocked = false,
-                    isEnabled = true
-                ),
-                AppLimitEntity(
-                    packageName = "com.facebook.katana",
-                    appName = "Facebook",
-                    dailyLimit = 60,
-                    warningThreshold = 45,
-                    isBlocked = false,
-                    isEnabled = true
-                ),
-                AppLimitEntity(
-                    packageName = "com.snapchat.android",
-                    appName = "Snapchat",
-                    dailyLimit = 50,
-                    warningThreshold = 35,
-                    isBlocked = false,
-                    isEnabled = true
-                ),
-                AppLimitEntity(
-                    packageName = "com.zhiliaoapp.musically",
-                    appName = "TikTok",
-                    dailyLimit = 80,
-                    warningThreshold = 60,
-                    isBlocked = false,
-                    isEnabled = true
-                )
-            )
-            dao.upsertLimits(defaultLimits)
-
-            // 2. Prepopulate Achievements starting from 0 progress
-            val achievements = listOf(
-                AchievementEntity(
-                    id = "first_step",
-                    title = "First Step",
-                    description = "Log your very first short-form scroll session",
-                    iconName = "flag",
-                    targetValue = 1,
-                    currentValue = 0,
-                    isUnlocked = false,
-                    unlockedAt = null
-                ),
-                AchievementEntity(
-                    id = "under_100",
-                    title = "Under 100",
-                    description = "Stay under 100 scrolls in a single day",
-                    iconName = "shield",
-                    targetValue = 100,
-                    currentValue = 0,
-                    isUnlocked = false,
-                    unlockedAt = null
-                ),
-                AchievementEntity(
-                    id = "streak_7",
-                    title = "7-Day Streak",
-                    description = "Maintain a 7-day streak under your daily limit",
-                    iconName = "fire",
-                    targetValue = 7,
-                    currentValue = 0,
-                    isUnlocked = false
-                ),
-                AchievementEntity(
-                    id = "touch_grass",
-                    title = "Touch Grass Champion",
-                    description = "Keep daily scrolls below 30 on a weekend day",
-                    iconName = "grass",
-                    targetValue = 30,
-                    currentValue = 0,
-                    isUnlocked = false,
-                    unlockedAt = null
-                ),
-                AchievementEntity(
-                    id = "battle_winner",
-                    title = "Scroll Ninja",
-                    description = "Defeat a friend in a 1v1 Scroll Battle",
-                    iconName = "sword",
-                    targetValue = 1,
-                    currentValue = 0,
-                    isUnlocked = false,
-                    unlockedAt = null
-                ),
-                AchievementEntity(
-                    id = "zen_master",
-                    title = "Zen Master",
-                    description = "Complete 5 mindful focus breaks to earn bonus scrolls",
-                    iconName = "lotus",
-                    targetValue = 5,
-                    currentValue = 0,
-                    isUnlocked = false
-                )
-            )
-            dao.upsertAchievements(achievements)
-
-            // 3. First-time install: Today's progress starts strictly at 0
-            val today = getTodayDate()
-            dao.upsertDailyStats(
-                DailyStatsEntity(
-                    date = today,
-                    totalScrolls = 0,
-                    goal = 100,
-                    isGoalMet = true,
-                    xpEarned = 0
-                )
-            )
-
-            // Initialize app stats for supported apps at 0 scrolls
-            dao.upsertAppStats(AppStatsEntity(date = today, packageName = "com.instagram.android", appName = "Instagram", scrollCount = 0))
-            dao.upsertAppStats(AppStatsEntity(date = today, packageName = "com.google.android.youtube", appName = "YouTube Shorts", scrollCount = 0))
-            dao.upsertAppStats(AppStatsEntity(date = today, packageName = "com.facebook.katana", appName = "Facebook", scrollCount = 0))
-            dao.upsertAppStats(AppStatsEntity(date = today, packageName = "com.snapchat.android", appName = "Snapchat", scrollCount = 0))
-            dao.upsertAppStats(AppStatsEntity(date = today, packageName = "com.zhiliaoapp.musically", appName = "TikTok", scrollCount = 0))
-
-            // 4. Friend Battles initial invites starting at 0 user scrolls
-            val battles = listOf(
-                FriendBattleEntity(
-                    id = "battle_alex",
-                    friendName = "Alex Rivera",
-                    friendUsername = "@alex_r",
-                    userScrolls = 0,
-                    friendScrolls = 42,
-                    date = today,
-                    status = "WINNING"
-                ),
-                FriendBattleEntity(
-                    id = "battle_sarah",
-                    friendName = "Sarah Chen",
-                    friendUsername = "@schen",
-                    userScrolls = 0,
-                    friendScrolls = 35,
-                    date = today,
-                    status = "WINNING"
-                )
-            )
-            dao.upsertBattles(battles)
+        override fun onOpen(db: SupportSQLiteDatabase) {
+            super.onOpen(db)
+            // WAL keeps the accessibility service's scroll writes from blocking reads
+            // that the Compose UI is observing.
+            try {
+                db.execSQL("PRAGMA foreign_keys = ON")
+            } catch (_: Exception) {
+                // Non-fatal: no FK constraints are declared yet.
+            }
         }
     }
 }

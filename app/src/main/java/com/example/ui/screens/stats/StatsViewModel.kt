@@ -4,16 +4,18 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ScrollyApp
+import com.example.data.local.ScrollyDatabase
 import com.example.data.local.dao.AppLifetimeTotal
-import com.example.data.local.entity.DailyStatsEntity
+import com.example.data.repository.TrackingRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -45,6 +47,7 @@ data class TimeframeStatsUiState(
     val periodLabel: String = "",
     val canGoNext: Boolean = false,
     val chartBars: List<ChartBarData> = emptyList(),
+    val chartCaption: String = "",
     val totalReels: Int = 0,
     val secondaryStat: Int = 0,
     val secondaryStatLabel: String = "Daily avg.",
@@ -55,11 +58,12 @@ data class TimeframeStatsUiState(
 @OptIn(ExperimentalCoroutinesApi::class)
 class StatsViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val trackingRepo = ScrollyApp.instance.trackingRepository
+    private val trackingRepo: TrackingRepository = ScrollyApp.instance.trackingRepository
 
     private val _selectedTimeframe = MutableStateFlow(StatsTimeframe.WEEK)
     val selectedTimeframe: StateFlow<StatsTimeframe> = _selectedTimeframe.asStateFlow()
 
+    /** 0 = current period, -1 = previous, … */
     private val _periodOffset = MutableStateFlow(0)
     val periodOffset: StateFlow<Int> = _periodOffset.asStateFlow()
 
@@ -72,10 +76,9 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
         _periodOffset.value -= 1
     }
 
+    /** Cannot move past the current period. */
     fun navigateNext() {
-        if (_periodOffset.value < 0) {
-            _periodOffset.value += 1
-        }
+        if (_periodOffset.value < 0) _periodOffset.value += 1
     }
 
     fun resetToCurrent() {
@@ -85,268 +88,252 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<TimeframeStatsUiState> = combine(
         _selectedTimeframe,
         _periodOffset
-    ) { timeframe, offset ->
-        Pair(timeframe, offset)
-    }.flatMapLatest { (timeframe, offset) ->
-        when (timeframe) {
-            StatsTimeframe.DAY -> buildDayFlow(offset)
-            StatsTimeframe.WEEK -> buildWeekFlow(offset)
-            StatsTimeframe.MONTH -> buildMonthFlow(offset)
-            StatsTimeframe.YEAR -> buildYearFlow(offset)
+    ) { timeframe, offset -> timeframe to offset }
+        .flatMapLatest { (timeframe, offset) ->
+            when (timeframe) {
+                StatsTimeframe.DAY -> dayState(offset)
+                StatsTimeframe.WEEK -> weekState(offset)
+                StatsTimeframe.MONTH -> monthState(offset)
+                StatsTimeframe.YEAR -> yearState(offset)
+            }
         }
-    }.stateIn(
-        viewModelScope,
-        SharingStarted.WhileSubscribed(5000),
-        TimeframeStatsUiState()
-    )
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            TimeframeStatsUiState()
+        )
 
-    // --- DAY STATS FLOW ---
-    private fun buildDayFlow(offset: Int) = kotlinx.coroutines.flow.flow {
-        val cal = Calendar.getInstance()
-        cal.add(Calendar.DAY_OF_YEAR, offset)
-        val sdfDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val targetDate = sdfDate.format(cal.time)
+    // ── Day ───────────────────────────────────────────────────────────────
 
-        val periodLabel = when (offset) {
-            0 -> "Today, " + SimpleDateFormat("MMM d", Locale.getDefault()).format(cal.time)
-            -1 -> "Yesterday, " + SimpleDateFormat("MMM d", Locale.getDefault()).format(cal.time)
-            else -> SimpleDateFormat("EEE, MMM d, yyyy", Locale.getDefault()).format(cal.time)
-        }
+    private fun dayState(offset: Int): Flow<TimeframeStatsUiState> = flow {
+        val date = ScrollyDatabase.getDateOffset(offset)
+        val isToday = offset == 0
 
         combine(
-            trackingRepo.getDailyStatsFlow(targetDate),
-            trackingRepo.getAppStatsSummaryForDateFlow(targetDate),
-            trackingRepo.getAppLimitsFlow()
-        ) { dailyStats, appSummaries, limits ->
+            trackingRepo.getDailyStatsFlow(date),
+            trackingRepo.getAppStatsSummaryForDateFlow(date),
+            trackingRepo.getScrollsByTimeOfDayFlow(date)
+        ) { dailyStats, appSummaries, byPeriod ->
             val total = dailyStats?.totalScrolls ?: 0
-            val goal = dailyStats?.goal ?: 100
+            val goal = dailyStats?.goal ?: ScrollyDatabase.DEFAULT_DAILY_GOAL
 
-            // 4 time quarter bars for the day
-            val quarterLabels = listOf("Morning", "Afternoon", "Evening", "Night")
-            val bars = quarterLabels.mapIndexed { idx, label ->
-                // Distribute known total across time windows gracefully
-                val segmentCount = if (total == 0) 0 else {
-                    when (idx) {
-                        0 -> (total * 0.15).toInt()
-                        1 -> (total * 0.35).toInt()
-                        2 -> (total * 0.40).toInt()
-                        else -> total - ((total * 0.15).toInt() + (total * 0.35).toInt() + (total * 0.40).toInt())
-                    }
-                }
+            // Real per-period counts, bucketed from the raw event log. The previous
+            // implementation applied fixed 15/35/40% ratios to the day's total, which
+            // produced a Morning/Afternoon/Evening/Night split unrelated to when the
+            // user actually scrolled.
+            val bars = byPeriod.mapIndexed { index, entry ->
                 ChartBarData(
-                    label = label,
-                    subLabel = when (idx) {
-                        0 -> "6am-12"
-                        1 -> "12-5pm"
-                        2 -> "5-9pm"
-                        else -> "9pm-6am"
-                    },
-                    count = segmentCount,
-                    isCurrent = (offset == 0)
+                    label = entry.period.label,
+                    subLabel = subLabelFor(index),
+                    count = entry.count,
+                    isCurrent = false
                 )
             }
 
-            val appItems = buildAppBreakdown(appSummaries, total)
-            val insight = buildInsight(total, goal, StatsTimeframe.DAY)
-
             TimeframeStatsUiState(
                 timeframe = StatsTimeframe.DAY,
-                periodLabel = periodLabel,
+                periodLabel = if (isToday) "Today · ${displayDate(date)}" else displayDate(date),
                 canGoNext = offset < 0,
                 chartBars = bars,
+                chartCaption = "Real activity by time of day",
                 totalReels = total,
                 secondaryStat = goal,
                 secondaryStatLabel = "Daily goal",
-                appBreakdown = appItems,
-                insightMessage = insight
+                appBreakdown = buildAppBreakdown(appSummaries, total),
+                insightMessage = buildInsight(total, goal, StatsTimeframe.DAY)
             )
         }.collect { emit(it) }
     }
 
-    // --- WEEK STATS FLOW ---
-    private fun buildWeekFlow(offset: Int) = kotlinx.coroutines.flow.flow {
-        val cal = Calendar.getInstance()
-        cal.firstDayOfWeek = Calendar.MONDAY
-        cal.add(Calendar.WEEK_OF_YEAR, offset)
-        cal.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
+    private fun subLabelFor(index: Int): String = when (index) {
+        0 -> "6am–12"
+        1 -> "12–5pm"
+        2 -> "5–9pm"
+        else -> "9pm–6am"
+    }
 
-        val sdfDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val sdfShort = SimpleDateFormat("MMM d", Locale.getDefault())
-        val sdfDayName = SimpleDateFormat("EEE", Locale.getDefault())
+    // ── Week ──────────────────────────────────────────────────────────────
+
+    private fun weekState(offset: Int): Flow<TimeframeStatsUiState> = flow {
+        val cal = Calendar.getInstance().apply {
+            firstDayOfWeek = Calendar.MONDAY
+            add(Calendar.WEEK_OF_YEAR, offset)
+            set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
+        }
+
+        val dateFmt = dateFormat("yyyy-MM-dd")
+        val dayFmt = dateFormat("EEE")
+        val shortFmt = dateFormat("MMM d")
 
         val weekDates = (0..6).map { dayOffset ->
             val dayCal = cal.clone() as Calendar
             dayCal.add(Calendar.DAY_OF_WEEK, dayOffset)
-            Triple(sdfDate.format(dayCal.time), sdfDayName.format(dayCal.time), dayCal)
+            Triple(dateFmt.format(dayCal.time), dayFmt.format(dayCal.time), dayCal.time)
         }
 
         val startDate = weekDates.first().first
         val endDate = weekDates.last().first
 
-        val periodLabel = "${sdfShort.format(weekDates.first().third.time)} - ${sdfShort.format(weekDates.last().third.time)}"
-
         combine(
             trackingRepo.getDailyStatsBetweenFlow(startDate, endDate),
             trackingRepo.getAppStatsSummaryBetweenFlow(startDate, endDate)
         ) { dailyList, appSummaries ->
-            val statsMap = dailyList.associateBy { it.date }
-            val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Calendar.getInstance().time)
+                val statsMap = dailyList.associateBy { it.date }
+                val todayStr = ScrollyDatabase.getTodayDate()
 
-            val bars = weekDates.map { (dateStr, dayName, _) ->
-                val count = statsMap[dateStr]?.totalScrolls ?: 0
-                ChartBarData(
-                    label = dayName,
-                    subLabel = dateStr.takeLast(2),
-                    count = count,
-                    isCurrent = (dateStr == todayStr)
+                val bars = weekDates.map { (dateStr, dayName, timeMillis) ->
+                    ChartBarData(
+                        label = dayName,
+                        subLabel = dateFormat("d").format(timeMillis),
+                        count = statsMap[dateStr]?.totalScrolls ?: 0,
+                        isCurrent = dateStr == todayStr
+                    )
+                }
+
+                val total = bars.sumOf { it.count }
+                // Days that actually have a row, so a fresh install is not averaged
+                // down by seven zeroes.
+                val trackedDays = bars.count { it.count > 0 }.coerceAtLeast(1)
+
+                TimeframeStatsUiState(
+                    timeframe = StatsTimeframe.WEEK,
+                    periodLabel = "${shortFmt.format(weekDates.first().third)} – ${shortFmt.format(weekDates.last().third)}",
+                    canGoNext = offset < 0,
+                    chartBars = bars,
+                    chartCaption = "Scrolls per day",
+                    totalReels = total,
+                    secondaryStat = total / trackedDays,
+                    secondaryStatLabel = "Avg / tracked day",
+                    appBreakdown = buildAppBreakdown(appSummaries, total),
+                    insightMessage = buildInsight(total, total * 2, StatsTimeframe.WEEK)
                 )
-            }
-
-            val total = bars.sumOf { it.count }
-            val dailyAvg = if (total > 0) (total / 7) else 0
-
-            val appItems = buildAppBreakdown(appSummaries, total)
-            val insight = buildInsight(total, 700, StatsTimeframe.WEEK)
-
-            TimeframeStatsUiState(
-                timeframe = StatsTimeframe.WEEK,
-                periodLabel = periodLabel,
-                canGoNext = offset < 0,
-                chartBars = bars,
-                totalReels = total,
-                secondaryStat = dailyAvg,
-                secondaryStatLabel = "Daily avg.",
-                appBreakdown = appItems,
-                insightMessage = insight
-            )
         }.collect { emit(it) }
     }
 
-    // --- MONTH STATS FLOW ---
-    private fun buildMonthFlow(offset: Int) = kotlinx.coroutines.flow.flow {
-        val cal = Calendar.getInstance()
-        cal.add(Calendar.MONTH, offset)
-        val sdfMonthPrefix = SimpleDateFormat("yyyy-MM", Locale.getDefault())
-        val sdfMonthLabel = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
-        val monthPrefix = sdfMonthPrefix.format(cal.time)
-        val periodLabel = sdfMonthLabel.format(cal.time)
+    // ── Month ─────────────────────────────────────────────────────────────
+
+    private fun monthState(offset: Int): Flow<TimeframeStatsUiState> = flow {
+        val cal = Calendar.getInstance().apply { add(Calendar.MONTH, offset) }
+        val monthPrefix = dateFormat("yyyy-MM").format(cal.time)
+        val periodLabel = dateFormat("MMMM yyyy").format(cal.time)
+        val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
 
         combine(
             trackingRepo.getDailyStatsLikeFlow(monthPrefix),
             trackingRepo.getAppStatsSummaryLikeFlow(monthPrefix)
         ) { dailyList, appSummaries ->
-            val statsMap = dailyList.associateBy { it.date }
-            val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+                val statsMap = dailyList.associateBy { it.date }
 
-            // Group into 4-5 weeks
-            val week1Count = (1..7).sumOf { day -> statsMap[String.format("%s-%02d", monthPrefix, day)]?.totalScrolls ?: 0 }
-            val week2Count = (8..14).sumOf { day -> statsMap[String.format("%s-%02d", monthPrefix, day)]?.totalScrolls ?: 0 }
-            val week3Count = (15..21).sumOf { day -> statsMap[String.format("%s-%02d", monthPrefix, day)]?.totalScrolls ?: 0 }
-            val week4Count = (22..28).sumOf { day -> statsMap[String.format("%s-%02d", monthPrefix, day)]?.totalScrolls ?: 0 }
-            val week5Count = if (daysInMonth > 28) {
-                (29..daysInMonth).sumOf { day -> statsMap[String.format("%s-%02d", monthPrefix, day)]?.totalScrolls ?: 0 }
-            } else 0
+                fun weekTotal(from: Int, to: Int): Int =
+                    (from..to).sumOf { day ->
+                        statsMap[monthPrefix + "-" + day.toString().padStart(2, '0')]
+                            ?.totalScrolls ?: 0
+                    }
 
-            val bars = mutableListOf(
-                ChartBarData(label = "W1", subLabel = "1-7", count = week1Count),
-                ChartBarData(label = "W2", subLabel = "8-14", count = week2Count),
-                ChartBarData(label = "W3", subLabel = "15-21", count = week3Count),
-                ChartBarData(label = "W4", subLabel = "22-28", count = week4Count)
-            )
-            if (daysInMonth > 28) {
-                bars.add(ChartBarData(label = "W5", subLabel = "29-$daysInMonth", count = week5Count))
-            }
+                val bars = mutableListOf(
+                    ChartBarData("W1", "1–7", weekTotal(1, 7)),
+                    ChartBarData("W2", "8–14", weekTotal(8, 14)),
+                    ChartBarData("W3", "15–21", weekTotal(15, 21)),
+                    ChartBarData("W4", "22–28", weekTotal(22, 28))
+                )
+                if (daysInMonth > 28) {
+                    bars += ChartBarData("W5", "29–$daysInMonth", weekTotal(29, daysInMonth))
+                }
 
-            val total = bars.sumOf { it.count }
-            val dailyAvg = if (total > 0) (total / daysInMonth) else 0
+                val total = bars.sumOf { it.count }
+                val trackedDays = statsMap.values.count { it.totalScrolls > 0 }.coerceAtLeast(1)
 
-            val appItems = buildAppBreakdown(appSummaries, total)
-            val insight = buildInsight(total, daysInMonth * 100, StatsTimeframe.MONTH)
-
-            TimeframeStatsUiState(
-                timeframe = StatsTimeframe.MONTH,
-                periodLabel = periodLabel,
-                canGoNext = offset < 0,
-                chartBars = bars,
-                totalReels = total,
-                secondaryStat = dailyAvg,
-                secondaryStatLabel = "Daily avg.",
-                appBreakdown = appItems,
-                insightMessage = insight
-            )
+                TimeframeStatsUiState(
+                    timeframe = StatsTimeframe.MONTH,
+                    periodLabel = periodLabel,
+                    canGoNext = offset < 0,
+                    chartBars = bars,
+                    chartCaption = "Scrolls per week",
+                    totalReels = total,
+                    secondaryStat = total / trackedDays,
+                    secondaryStatLabel = "Avg / active day",
+                    appBreakdown = buildAppBreakdown(appSummaries, total),
+                    insightMessage = buildInsight(total, daysInMonth * 100, StatsTimeframe.MONTH)
+                )
         }.collect { emit(it) }
     }
 
-    // --- YEAR STATS FLOW ---
-    private fun buildYearFlow(offset: Int) = kotlinx.coroutines.flow.flow {
-        val cal = Calendar.getInstance()
-        cal.add(Calendar.YEAR, offset)
-        val sdfYear = SimpleDateFormat("yyyy", Locale.getDefault())
-        val yearStr = sdfYear.format(cal.time)
-        val periodLabel = yearStr
+    // ── Year ──────────────────────────────────────────────────────────────
+
+    private fun yearState(offset: Int): Flow<TimeframeStatsUiState> = flow {
+        val cal = Calendar.getInstance().apply { add(Calendar.YEAR, offset) }
+        val yearStr = dateFormat("yyyy").format(cal.time)
 
         combine(
             trackingRepo.getDailyStatsLikeFlow(yearStr),
             trackingRepo.getAppStatsSummaryLikeFlow(yearStr)
         ) { dailyList, appSummaries ->
-            val monthNames = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
-            val bars = monthNames.mapIndexed { idx, mName ->
-                val monthPrefix = String.format("%s-%02d", yearStr, idx + 1)
-                val monthTotal = dailyList.filter { it.date.startsWith(monthPrefix) }.sumOf { it.totalScrolls }
-                ChartBarData(
-                    label = mName,
-                    count = monthTotal
+                val monthNames = listOf(
+                    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
                 )
-            }
+                val bars = monthNames.mapIndexed { index, name ->
+                    val prefix = yearStr + "-" + (index + 1).toString().padStart(2, '0')
+                    ChartBarData(
+                        label = name,
+                        count = dailyList.filter { it.date.startsWith(prefix) }.sumOf { it.totalScrolls }
+                    )
+                }
 
-            val total = bars.sumOf { it.count }
-            val monthlyAvg = if (total > 0) (total / 12) else 0
+                val total = bars.sumOf { it.count }
+                val activeMonths = bars.count { it.count > 0 }.coerceAtLeast(1)
 
-            val appItems = buildAppBreakdown(appSummaries, total)
-            val insight = buildInsight(total, 36500, StatsTimeframe.YEAR)
-
-            TimeframeStatsUiState(
-                timeframe = StatsTimeframe.YEAR,
-                periodLabel = periodLabel,
-                canGoNext = offset < 0,
-                chartBars = bars,
-                totalReels = total,
-                secondaryStat = monthlyAvg,
-                secondaryStatLabel = "Monthly avg.",
-                appBreakdown = appItems,
-                insightMessage = insight
-            )
+                TimeframeStatsUiState(
+                    timeframe = StatsTimeframe.YEAR,
+                    periodLabel = yearStr,
+                    canGoNext = offset < 0,
+                    chartBars = bars,
+                    chartCaption = "Scrolls per month",
+                    totalReels = total,
+                    secondaryStat = total / activeMonths,
+                    secondaryStatLabel = "Avg / active month",
+                    appBreakdown = buildAppBreakdown(appSummaries, total),
+                    insightMessage = buildInsight(total, 36_500, StatsTimeframe.YEAR)
+                )
         }.collect { emit(it) }
     }
 
-    private fun buildAppBreakdown(summaries: List<AppLifetimeTotal>, total: Int): List<AppUsageItem> {
-        val defaultApps = listOf(
-            Pair("com.google.android.youtube", "YouTube Shorts"),
-            Pair("com.instagram.android", "Instagram"),
-            Pair("com.facebook.katana", "Facebook"),
-            Pair("com.zhiliaoapp.musically", "TikTok"),
-            Pair("com.snapchat.android", "Snapchat")
-        )
+    // ── Helpers ───────────────────────────────────────────────────────────
 
-        val map = summaries.associateBy { it.packageName }
-
-        return defaultApps.map { (pkg, name) ->
-            val count = map[pkg]?.totalScrolls ?: 0
-            val fraction = if (total > 0) (count.toFloat() / total).coerceIn(0f, 1f) else 0f
-            AppUsageItem(
-                packageName = pkg,
-                appName = name,
-                count = count,
-                fractionOfTotal = fraction
-            )
-        }
-    }
+    /**
+     * App breakdown, sorted by contribution and including any app that actually has data.
+     *
+     * The previous version returned a fixed five-app list in a fixed order, so a user's
+     * top app was never highlighted and an app they used heavily could be missing.
+     */
+    private fun buildAppBreakdown(summaries: List<AppLifetimeTotal>, total: Int): List<AppUsageItem> =
+        summaries
+            .filter { it.totalScrolls > 0 }
+            .sortedByDescending { it.totalScrolls }
+            .map { summary ->
+                AppUsageItem(
+                    packageName = summary.packageName,
+                    appName = summary.appName,
+                    count = summary.totalScrolls,
+                    fractionOfTotal = if (total > 0) {
+                        (summary.totalScrolls.toFloat() / total).coerceIn(0f, 1f)
+                    } else {
+                        0f
+                    }
+                )
+            }
 
     private fun buildInsight(total: Int, goal: Int, timeframe: StatsTimeframe): String {
+        val period = timeframe.label.lowercase()
         return when {
-            total == 0 -> "0 scrolls recorded for this ${timeframe.label.lowercase()}. Clean, mindful focus!"
-            total <= goal -> "You stayed within healthy limits (${total}/${goal} reels). Excellent control!"
-            else -> "Logged ${total} reels this ${timeframe.label.lowercase()}. Consider adjusting app limits to protect focus."
+            total == 0 -> "No scrolls recorded for this $period. Clean, mindful focus."
+            total <= goal -> "You stayed within your limit this $period ($total/$goal). Excellent control."
+            else -> "$total scrolls this $period. Consider tightening an app limit to protect focus."
         }
     }
+
+    private fun dateFormat(pattern: String) = SimpleDateFormat(pattern, Locale.getDefault())
+
+    private fun displayDate(date: String): String =
+        dateFormat("EEE, MMM d, yyyy").format(dateFormat("yyyy-MM-dd").parse(date)!!)
 }

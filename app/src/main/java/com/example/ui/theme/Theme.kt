@@ -15,6 +15,8 @@ private val SleekColorScheme = lightColorScheme(
     onSecondaryContainer = SleekPillText,
     tertiary = SleekGold,
     onTertiary = SleekOnPrimary,
+    error = SleekRed,
+    onError = SleekOnPrimary,
     background = SleekBg,
     onBackground = SleekTextPrimary,
     surface = SleekCardSurface,
@@ -25,6 +27,15 @@ private val SleekColorScheme = lightColorScheme(
     outlineVariant = SleekBorder
 )
 
+/**
+ * Scrolly's theme.
+ *
+ * Single scheme on purpose. Every screen paints with explicit palette tokens rather than
+ * `MaterialTheme.colorScheme`, so wiring a dark scheme into `MaterialTheme` alone would
+ * have themed only a handful of components and left the rest bright white. A partial
+ * dark mode reads as a bug, so this stays light until the tokens themselves become
+ * theme-aware.
+ */
 @Composable
 fun ScrollyTheme(
     content: @Composable () -> Unit

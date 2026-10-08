@@ -61,7 +61,11 @@ import com.example.ui.theme.SleekCardHighlight
 import com.example.ui.theme.SleekCardSurface
 import com.example.ui.theme.SleekCardSurfaceElevated
 import com.example.ui.theme.SleekCardSurfaceSecondary
+import com.example.ui.theme.SleekFrameBorder
+import com.example.ui.theme.SleekFrameInset
+import com.example.ui.theme.SleekFrameSurface
 import com.example.ui.theme.SleekGreen
+import com.example.ui.theme.SleekHeroText
 import com.example.ui.theme.SleekPrimary
 import com.example.ui.theme.SleekTextMuted
 import com.example.ui.theme.SleekTextPrimary
@@ -199,7 +203,7 @@ fun NotchDynamicIslandCustomizer(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF141A22))
+                    .background(SleekFrameSurface)
                     .border(1.dp, SleekBorder, RoundedCornerShape(16.dp))
                     .padding(14.dp)
             ) {
@@ -281,7 +285,7 @@ fun NotchDynamicIslandCustomizer(
                             .fillMaxWidth()
                             .height(110.dp)
                             .clip(RoundedCornerShape(20.dp))
-                            .background(Color(0xFF0D1117))
+                            .background(SleekFrameInset)
                             .border(1.dp, SleekBorder, RoundedCornerShape(20.dp)),
                         contentAlignment = Alignment.TopCenter
                     ) {
@@ -290,7 +294,7 @@ fun NotchDynamicIslandCustomizer(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(2.dp)
-                                .background(Color(0xFF30363D))
+                                .background(SleekFrameBorder)
                         )
 
                         // Hardware Camera Cutout (Punch-Hole)
@@ -300,15 +304,15 @@ fun NotchDynamicIslandCustomizer(
                                 .offset(x = (config.offsetX).dp)
                                 .size(14.dp)
                                 .clip(CircleShape)
-                                .background(Color(0xFF1F242C))
-                                .border(1.dp, Color(0xFF484F58), CircleShape),
+                                .background(SleekCardSurfaceSecondary)
+                                .border(1.dp, SleekFrameBorder, CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
                             Box(
                                 modifier = Modifier
                                     .size(6.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0xFF090D12))
+                                    .background(SleekFrameInset)
                             )
                         }
 
@@ -318,8 +322,8 @@ fun NotchDynamicIslandCustomizer(
                                 .padding(top = 34.dp)
                                 .offset(x = (config.offsetX).dp)
                                 .clip(RoundedCornerShape(20.dp))
-                                .background(Color.Black)
-                                .border(1.dp, Color(0xFF333333), RoundedCornerShape(20.dp))
+                                .background(SleekHeroText)
+                                .border(1.dp, SleekBorder, RoundedCornerShape(20.dp))
                                 .padding(horizontal = 14.dp, vertical = 6.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -336,7 +340,7 @@ fun NotchDynamicIslandCustomizer(
                                     modifier = Modifier
                                         .size(6.dp)
                                         .clip(CircleShape)
-                                        .background(Color(0xFF4CAF50))
+                                        .background(SleekGreen)
                                 )
                             }
                         }

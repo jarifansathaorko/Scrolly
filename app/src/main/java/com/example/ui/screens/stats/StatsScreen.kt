@@ -181,6 +181,16 @@ fun StatsScreen(
                     .padding(vertical = 20.dp, horizontal = 12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                if (uiState.chartCaption.isNotEmpty()) {
+                    Text(
+                        text = uiState.chartCaption,
+                        style = MaterialTheme.typography.labelSmall.copy(color = SleekTextMuted),
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+
                 if (uiState.chartBars.isEmpty()) {
                     Box(
                         modifier = Modifier
@@ -189,7 +199,7 @@ fun StatsScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "No history recorded yet.\nData starts from 0 on first install.",
+                            text = "No history yet.\nYour first logged scroll starts the chart.",
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 color = SleekTextMuted,
                                 textAlign = TextAlign.Center
@@ -376,7 +386,22 @@ fun StatsScreen(
                 .padding(bottom = 12.dp)
         )
 
-        uiState.appBreakdown.forEach { item ->
+        if (uiState.appBreakdown.isEmpty()) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .border(1.dp, SleekBorder, RoundedCornerShape(20.dp)),
+                colors = CardDefaults.cardColors(containerColor = SleekCardSurface)
+            ) {
+                Text(
+                    text = "No app data for this ${selectedTimeframe.label.lowercase()} yet. Scrolls appear here per app as they're logged.",
+                    style = MaterialTheme.typography.bodySmall.copy(color = SleekTextMuted),
+                    modifier = Modifier.padding(18.dp)
+                )
+            }
+        } else {
+            uiState.appBreakdown.forEach { item ->
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -419,10 +444,11 @@ fun StatsScreen(
                         text = "${item.count}",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
-                            color = if (item.count > 0) SleekTextPrimary else SleekTextMuted
+                            color = SleekTextPrimary
                         )
                     )
                 }
+            }
             }
         }
 
