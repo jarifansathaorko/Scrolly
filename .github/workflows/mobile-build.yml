@@ -57,22 +57,25 @@ jobs:
         run: npm ci
       - name: Build web
         run: npm run build
-      - name: Cap Doctor
-        run: npx cap doctor || true
-      - name: Sync Capacitor (copy + update)
+      - name: Sync Capacitor
         run: |
-          echo "=== Running cap copy ==="
-          npx cap copy android 2>&1 || echo "copy failed"
-          echo "=== Running cap update ==="
-          npx cap update android 2>&1 || echo "update failed"
-          echo "=== Listing assets ==="
-          ls -lh android/app/src/main/assets/public/ | head -n 20
-          echo "=== Sync done ==="
+          npx cap copy android
+          npx cap update android
       - name: Build Debug APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleDebug --no-daemon --stacktrace --info 2>&1 | tee ../gradle-build.log
+          echo "Gradle exit code: ${PIPESTATUS[0]}"
+          ls -lh app/build/outputs/apk/debug/ || echo "no apk dir"
+          cat ../gradle-build.log | tail -n 200
+      - name: Upload gradle log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-log
+          path: gradle-build.log
+          retention-days: 7
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
@@ -91,29 +94,3 @@ jobs:
           name: brainrot-release-apk
           path: android/app/build/outputs/apk/release/app-release-unsigned.apk
           retention-days: 30
-
-  build-pwa:
-    name: 🔧 PWA Audit
-    runs-on: ubuntu-latest
-    needs: build-web
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - name: Install & Build
-        run: |
-          npm ci
-          npm run build
-      - name: Serve & Lighthouse
-        run: |
-          npm install -g serve
-          serve -s dist -l 3000 &
-          sleep 5
-          npx lighthouse http://localhost:3000 --only-categories=pwa,performance,accessibility --chrome-flags="--headless --no-sandbox" --output=json --output-path=./lighthouse.json || true
-      - name: Check manifest
-        run: |
-          cat public/manifest.json
