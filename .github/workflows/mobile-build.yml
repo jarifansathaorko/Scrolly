@@ -49,15 +49,22 @@ jobs:
         run: |
           npx cap doctor
           npx cap copy android 2>&1 | tee copy.log
+          echo "COPY_EXIT:${PIPESTATUS[0]}"
           npx cap update android 2>&1 | tee update.log
-      - name: Create issue on failure
+          echo "UPDATE_EXIT:${PIPESTATUS[0]}"
+      - name: Upload logs to gist on failure
         if: failure()
         run: |
-          echo "Creating issue with logs..."
+          echo "Creating gist..."
           cat copy.log
           cat update.log
-          BODY=$(cat copy.log update.log | tail -n 200 | head -c 60000)
-          gh api repos/${{ github.repository }}/issues -f title="Build failed run $GITHUB_RUN_ID" -f body="Logs:\n\`\`\`\n$BODY\n\`\`\`" || echo "failed to create issue"
+          CONTENT=$(cat copy.log update.log 2>&1 | tail -c 9000 | base64 -w 0 || cat copy.log update.log | tail -c 9000)
+          # Try to create gist via curl
+          curl -X POST -H "Authorization: token $GH_TOKEN" -H "Content-Type: application/json" \
+            -d "{\"description\":\"Build logs $GITHUB_RUN_ID\",\"public\":false,\"files\":{\"copy.log\":{\"content\": $(cat copy.log | jq -Rs .)},\"update.log\":{\"content\": $(cat update.log | jq -Rs .)}}}" \
+            https://api.github.com/gists || echo "gist failed"
+          # Also try gh api
+          gh api gists -f public=false -f description="Build logs $GITHUB_RUN_ID" -f files[copy.log][content]="$(cat copy.log | head -c 8000)" || echo "gh gist failed"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build Debug APK
