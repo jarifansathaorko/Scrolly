@@ -48,31 +48,55 @@ jobs:
       - run: npm run build
       - name: Sync Capacitor
         run: |
-          npx cap doctor
-          npx cap copy android
-          npx cap update android
-          ls -lh android/app/src/main/assets/public/ | head
+          npx cap doctor 2>&1 | tee /tmp/doctor.log
+          npx cap copy android 2>&1 | tee /tmp/copy.log
+          COPY_EXIT=${PIPESTATUS[0]}
+          echo "COPY_EXIT:$COPY_EXIT" >> /tmp/copy.log
+          if [ $COPY_EXIT -ne 0 ]; then
+            echo "COPY FAILED"
+            cat /tmp/copy.log
+            exit $COPY_EXIT
+          fi
+          npx cap update android 2>&1 | tee /tmp/update.log
+          UPDATE_EXIT=${PIPESTATUS[0]}
+          echo "UPDATE_EXIT:$UPDATE_EXIT" >> /tmp/update.log
+          cat /tmp/update.log
+          exit $UPDATE_EXIT
+      - name: Push sync logs on failure
+        if: failure()
+        run: |
+          echo "Sync failed, pushing logs"
+          git config user.name "CI"
+          git config user.email "ci@brainrot.app"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          git checkout -B debug-logs
+          cp /tmp/*.log ./ 2>/dev/null || true
+          ls -lh *.log
+          cat /tmp/copy.log
+          cat /tmp/update.log
+          cat /tmp/doctor.log
+          git add *.log
+          git commit -m "sync failure logs $GITHUB_RUN_ID" || true
+          git push origin debug-logs --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build Debug APK
         run: |
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../gradle.log
-          echo "=== GRADLE LOG TAIL ==="
-          tail -n 200 ../gradle.log
-      - name: Push logs on failure
+      - name: Push gradle logs on failure
         if: failure()
         run: |
-          echo "Build failed, pushing logs to debug-logs branch"
-          cat ../gradle.log 2>/dev/null | tail -n 500 || cat gradle.log | tail -n 500 || echo "no log"
           git config user.name "CI"
           git config user.email "ci@brainrot.app"
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           git checkout -B debug-logs
-          cp ../gradle.log ./gradle.log 2>/dev/null || cp gradle.log ./gradle.log 2>/dev/null || echo "no gradle log" > gradle.log
-          ls -lh *.log || true
+          cp ../gradle.log ./gradle.log 2>/dev/null || cp gradle.log ./gradle.log 2>/dev/null || true
+          cat ./gradle.log | tail -n 300
           git add gradle.log
-          git commit -m "gradle failure log $GITHUB_RUN_ID" || true
-          git push origin debug-logs --force --verbose 2>&1 | tail -n 20
+          git commit -m "gradle failure $GITHUB_RUN_ID" || true
+          git push origin debug-logs --force
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Upload Debug APK
