@@ -7,6 +7,9 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-web:
     name: 🌐 Build Web
@@ -27,6 +30,8 @@ jobs:
     needs: build-web
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -42,16 +47,28 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Sync Capacitor
+        id: sync
         run: |
-          npx cap doctor
-          for i in 1 2 3; do
-            echo "Attempt $i: cap copy"
-            npx cap copy android && break || sleep 5
-          done
-          for i in 1 2 3; do
-            echo "Attempt $i: cap update"
-            npx cap update android && break || sleep 5
-          done
+          set -o pipefail
+          npx cap doctor 2>&1 | tee /tmp/doctor.log
+          npx cap copy android 2>&1 | tee /tmp/copy.log
+          echo "COPY_EXIT:${PIPESTATUS[0]}" | tee -a /tmp/copy.log
+          npx cap update android 2>&1 | tee /tmp/update.log
+          echo "UPDATE_EXIT:${PIPESTATUS[0]}" | tee -a /tmp/update.log
+      - name: Push logs on failure
+        if: failure()
+        run: |
+          echo "Pushing logs..."
+          git config user.name "CI"
+          git config user.email "ci@brainrot.app"
+          git checkout -B debug-logs
+          cp /tmp/*.log ./ 2>/dev/null || true
+          ls -lh *.log
+          cat /tmp/copy.log
+          cat /tmp/update.log
+          git add *.log
+          git commit -m "logs for run $GITHUB_RUN_ID" || true
+          git push origin debug-logs --force
       - name: Build Debug APK
         run: |
           cd android
