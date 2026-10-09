@@ -14,22 +14,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-
       - name: Install dependencies
         run: npm ci
-
       - name: Lint
         run: npm run lint
-
       - name: Build web
         run: npm run build
-
       - name: Upload web artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -44,74 +39,51 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-
       - name: Setup Android SDK
         run: |
-          echo "ANDROID_HOME: $ANDROID_HOME"
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
-
       - name: Install dependencies
         run: npm ci
-
       - name: Build web
+        run: npm run build
+      - name: Cap Doctor
+        run: npx cap doctor || true
+      - name: Sync Capacitor (copy + update)
         run: |
-          npm run build
-          ls -lh dist/
-
-      - name: Debug files
-        run: |
-          ls -la
-          ls -la android/ || echo "no android"
-          cat capacitor.config.ts
-          cat package.json | grep -A5 '"cap'
-
-      - name: Sync Capacitor
-        run: |
-          set -o pipefail
-          npx cap sync android 2>&1 | tee cap-sync.log
-          echo "Sync exit code: $?"
-
-      - name: Upload sync log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cap-sync-log
-          path: cap-sync.log
-          retention-days: 7
-
+          echo "=== Running cap copy ==="
+          npx cap copy android 2>&1 || echo "copy failed"
+          echo "=== Running cap update ==="
+          npx cap update android 2>&1 || echo "update failed"
+          echo "=== Listing assets ==="
+          ls -lh android/app/src/main/assets/public/ | head -n 20
+          echo "=== Sync done ==="
       - name: Build Debug APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../gradle.log
-
+          ./gradlew assembleDebug --no-daemon --stacktrace
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: brainrot-debug-apk
-          path: |
-            android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
-
-      - name: Build Release APK (unsigned)
+      - name: Build Release APK
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/arena/')
         run: |
           cd android
           ./gradlew assembleRelease --no-daemon
-
       - name: Upload Release APK
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/arena/')
         uses: actions/upload-artifact@v4
@@ -127,28 +99,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-
       - name: Install & Build
         run: |
           npm ci
           npm run build
-
       - name: Serve & Lighthouse
         run: |
           npm install -g serve
           serve -s dist -l 3000 &
           sleep 5
           npx lighthouse http://localhost:3000 --only-categories=pwa,performance,accessibility --chrome-flags="--headless --no-sandbox" --output=json --output-path=./lighthouse.json || true
-          cat lighthouse.json | head -n 100
-
       - name: Check manifest
         run: |
-          echo "Checking PWA manifest..."
           cat public/manifest.json
-          ls -lh dist/ | head -n 20
