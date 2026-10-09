@@ -49,35 +49,30 @@ jobs:
       - name: Sync Capacitor
         run: |
           npx cap doctor 2>&1 | tee /tmp/doctor.log
-          npx cap copy android 2>&1 | tee /tmp/copy.log
-          COPY_EXIT=${PIPESTATUS[0]}
-          echo "COPY_EXIT:$COPY_EXIT" >> /tmp/copy.log
-          if [ $COPY_EXIT -ne 0 ]; then
-            echo "COPY FAILED"
-            cat /tmp/copy.log
-            exit $COPY_EXIT
-          fi
-          npx cap update android 2>&1 | tee /tmp/update.log
-          UPDATE_EXIT=${PIPESTATUS[0]}
-          echo "UPDATE_EXIT:$UPDATE_EXIT" >> /tmp/update.log
+          npx cap copy android 2>&1 | tee /tmp/copy.log; echo "EXIT:$?" >> /tmp/copy.log
+          cat /tmp/copy.log
+          npx cap update android 2>&1 | tee /tmp/update.log; echo "EXIT:$?" >> /tmp/update.log
           cat /tmp/update.log
-          exit $UPDATE_EXIT
+          # Check for failure
+          if grep -q "EXIT:1" /tmp/copy.log || grep -q "EXIT:1" /tmp/update.log; then
+            echo "SYNC FAILED"
+            exit 1
+          fi
       - name: Push sync logs on failure
         if: failure()
         run: |
-          echo "Sync failed, pushing logs"
+          set -x
           git config user.name "CI"
           git config user.email "ci@brainrot.app"
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           git checkout -B debug-logs
-          cp /tmp/*.log ./ 2>/dev/null || true
+          cp /tmp/*.log ./ || true
           ls -lh *.log
-          cat /tmp/copy.log
-          cat /tmp/update.log
-          cat /tmp/doctor.log
-          git add *.log
-          git commit -m "sync failure logs $GITHUB_RUN_ID" || true
-          git push origin debug-logs --force
+          cat /tmp/copy.log || true
+          git add *.log || true
+          git commit -m "sync logs $GITHUB_RUN_ID" || true
+          git push origin debug-logs --force 2>&1 | tee /tmp/push.log
+          cat /tmp/push.log
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build Debug APK
@@ -85,20 +80,6 @@ jobs:
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../gradle.log
-      - name: Push gradle logs on failure
-        if: failure()
-        run: |
-          git config user.name "CI"
-          git config user.email "ci@brainrot.app"
-          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-          git checkout -B debug-logs
-          cp ../gradle.log ./gradle.log 2>/dev/null || cp gradle.log ./gradle.log 2>/dev/null || true
-          cat ./gradle.log | tail -n 300
-          git add gradle.log
-          git commit -m "gradle failure $GITHUB_RUN_ID" || true
-          git push origin debug-logs --force
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
