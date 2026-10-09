@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: write
-  issues: write
 
 jobs:
   build-web:
@@ -31,6 +30,8 @@ jobs:
     needs: build-web
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -48,30 +49,32 @@ jobs:
       - name: Sync Capacitor
         run: |
           npx cap doctor
-          npx cap copy android 2>&1 | tee copy.log
-          echo "COPY_EXIT:${PIPESTATUS[0]}"
-          npx cap update android 2>&1 | tee update.log
-          echo "UPDATE_EXIT:${PIPESTATUS[0]}"
-      - name: Upload logs to gist on failure
-        if: failure()
-        run: |
-          echo "Creating gist..."
-          cat copy.log
-          cat update.log
-          CONTENT=$(cat copy.log update.log 2>&1 | tail -c 9000 | base64 -w 0 || cat copy.log update.log | tail -c 9000)
-          # Try to create gist via curl
-          curl -X POST -H "Authorization: token $GH_TOKEN" -H "Content-Type: application/json" \
-            -d "{\"description\":\"Build logs $GITHUB_RUN_ID\",\"public\":false,\"files\":{\"copy.log\":{\"content\": $(cat copy.log | jq -Rs .)},\"update.log\":{\"content\": $(cat update.log | jq -Rs .)}}}" \
-            https://api.github.com/gists || echo "gist failed"
-          # Also try gh api
-          gh api gists -f public=false -f description="Build logs $GITHUB_RUN_ID" -f files[copy.log][content]="$(cat copy.log | head -c 8000)" || echo "gh gist failed"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npx cap copy android
+          npx cap update android
+          ls -lh android/app/src/main/assets/public/ | head
       - name: Build Debug APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../gradle.log
+          echo "=== GRADLE LOG TAIL ==="
+          tail -n 200 ../gradle.log
+      - name: Push logs on failure
+        if: failure()
+        run: |
+          echo "Build failed, pushing logs to debug-logs branch"
+          cat ../gradle.log 2>/dev/null | tail -n 500 || cat gradle.log | tail -n 500 || echo "no log"
+          git config user.name "CI"
+          git config user.email "ci@brainrot.app"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          git checkout -B debug-logs
+          cp ../gradle.log ./gradle.log 2>/dev/null || cp gradle.log ./gradle.log 2>/dev/null || echo "no gradle log" > gradle.log
+          ls -lh *.log || true
+          git add gradle.log
+          git commit -m "gradle failure log $GITHUB_RUN_ID" || true
+          git push origin debug-logs --force --verbose 2>&1 | tail -n 20
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
