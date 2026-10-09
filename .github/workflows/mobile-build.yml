@@ -1,4 +1,4 @@
-name: 📱 Scrolly Mobile Build
+name: 📱 BrainRot Mobile Build
 
 on:
   push:
@@ -58,7 +58,15 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        run: |
+          echo "ANDROID_HOME: $ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT: $ANDROID_SDK_ROOT"
+          ls -la $ANDROID_HOME/cmdline-tools/ || true
+          # Accept licenses
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          # Install required packages (ignore if already installed)
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --list_installed || true
 
       - name: Install dependencies
         run: npm ci
@@ -78,23 +86,23 @@ jobs:
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: scrolly-debug-apk
+          name: brainrot-debug-apk
           path: |
             android/app/build/outputs/apk/debug/app-debug.apk
-            scrolly-debug.apk
+            android/app/build/outputs/apk/debug/*.apk
           retention-days: 14
 
       - name: Build Release APK (unsigned)
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/arena/')
         run: |
           cd android
           ./gradlew assembleRelease --no-daemon
 
       - name: Upload Release APK
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/arena/')
         uses: actions/upload-artifact@v4
         with:
-          name: scrolly-release-apk
+          name: brainrot-release-apk
           path: android/app/build/outputs/apk/release/app-release-unsigned.apk
           retention-days: 30
 
@@ -128,5 +136,5 @@ jobs:
       - name: Check manifest
         run: |
           echo "Checking PWA manifest..."
-          cat dist/manifest.json
-          ls -lh dist/icon-*.png
+          cat public/manifest.json
+          ls -lh dist/ | head -n 20
