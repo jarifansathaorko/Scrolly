@@ -64,9 +64,9 @@ export const BlockScreen: React.FC = () => {
         <ScrollyCharacter scrollCount={75} size={70} />
         <div className="flex-1 space-y-2">
           <div>
-            <h3 className="text-sm font-bold text-[#1D1B20]">Scrolly Interceptor</h3>
+            <h3 className="text-sm font-bold text-[#1D1B20]">BrainRot Interceptor</h3>
             <p className="text-xs text-[#49454F] mt-0.5 leading-snug">
-              When your daily limit is hit, Scrolly puts up a full-screen intervention to break the dopamine loop.
+              When your daily limit is hit, BrainRot puts up a full-screen intervention to break the dopamine loop.
             </p>
           </div>
 

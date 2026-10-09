@@ -306,7 +306,7 @@ export const ProfileScreen: React.FC = () => {
             <span className="text-xs text-[#79747E]">Clear App Cache & Data</span>
             <button
               onClick={() => {
-                if (window.confirm('Reset all Scrolly stats and preferences to initial state?')) {
+                if (window.confirm('Reset all BrainRot stats and preferences to initial state?')) {
                   resetAllData();
                 }
               }}

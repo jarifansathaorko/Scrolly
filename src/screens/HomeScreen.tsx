@@ -19,6 +19,7 @@ export const HomeScreen: React.FC = () => {
   const {
     todayStats,
     appStats,
+    dailyTotal,
     profile,
     selectedAppForSim,
     setSelectedAppForSim,
@@ -40,7 +41,9 @@ export const HomeScreen: React.FC = () => {
   const [localBatteryDialogOpen, setLocalBatteryDialogOpen] = useState(false);
   const [localOverlayDialogOpen, setLocalOverlayDialogOpen] = useState(false);
 
-  const totalScrolls = todayStats.totalScrolls;
+  // DAILY SCROLL COUNT - Only today's scrolls, never lifetime/weekly/monthly
+  // dailyTotal is sum of appStats (per-app daily counts), resets at midnight
+  const totalScrolls = dailyTotal;
   const dailyLimit = todayStats.goal;
   const mascotState = getMascotState(totalScrolls);
   const progressFraction = Math.min(1, totalScrolls / Math.max(1, dailyLimit));
@@ -61,7 +64,7 @@ export const HomeScreen: React.FC = () => {
               Android aggressively pauses background services to save battery, which can cause the floating counter to not show when switching between apps.
             </p>
             <p className="text-xs text-[#1D1B20] font-medium bg-[#E8DEF8] p-3 rounded-xl text-left">
-              ⚡ Scrolly's detection engine is built to draw less than 1% battery charge per day while staying active.
+              ⚡ BrainRot's detection engine is built to draw less than 1% battery charge per day while staying active.
             </p>
             <div className="flex space-x-2 pt-2">
               <button
@@ -125,7 +128,7 @@ export const HomeScreen: React.FC = () => {
       {/* --- TOP BAR --- */}
       <div className="flex items-center justify-between py-2">
         <div>
-          <h1 className="text-2xl font-black tracking-tight text-[#1D1B20]">Scrolly</h1>
+          <h1 className="text-2xl font-black tracking-tight text-[#1D1B20]">BrainRot</h1>
           <p className="text-xs text-[#79747E] font-medium">Take back your attention</p>
         </div>
 
@@ -139,27 +142,30 @@ export const HomeScreen: React.FC = () => {
         </div>
       </div>
 
-      {/* --- HERO CARD --- */}
+      {/* --- HERO CARD - DAILY SCROLL COUNT ONLY --- */}
       <div className="bg-[#D0BCFF] rounded-[28px] border border-[#CAC4D0] p-6 shadow-sm flex flex-col items-center relative overflow-hidden">
         {/* Subtle background circle decoration */}
         <div className="absolute -top-12 -right-12 w-40 h-40 rounded-full bg-white/20 pointer-events-none" />
 
         <div className="flex items-center justify-between w-full mb-3 z-10">
           <span className="text-[11px] font-bold tracking-widest text-[#21005D] uppercase">
-            TODAY'S SCROLLS
+            TODAY'S SCROLLS • DAILY ONLY
           </span>
           <div className="flex items-center space-x-1 px-2.5 py-0.5 rounded-xl bg-[#EADDFF] border border-[#21005D]/20">
             <span className="w-1.5 h-1.5 rounded-full bg-[#21005D] animate-ping" />
-            <span className="text-[10px] font-extrabold text-[#21005D]">LIVE</span>
+            <span className="text-[10px] font-extrabold text-[#21005D]">LIVE DAILY</span>
           </div>
         </div>
 
-        {/* Giant Scroll Count */}
-        <div className="text-7xl font-light text-[#21005D] tracking-tighter my-1">
+        {/* Giant Daily Scroll Count - TODAY ONLY, not lifetime/weekly/monthly */}
+        <div className="text-7xl font-light text-[#21005D] tracking-tighter my-1" title={`Daily scrolls today (${todayStats.date}): ${totalScrolls}`}>
           {totalScrolls}
         </div>
-        <p className="text-xs font-semibold text-[#21005D]/80 mb-4">
+        <p className="text-xs font-semibold text-[#21005D]/80 mb-1">
           Shorts & Reels consumed today
+        </p>
+        <p className="text-[10px] font-medium text-[#21005D]/60 mb-4">
+          {todayStats.date} • Resets at midnight • Not lifetime
         </p>
 
         {/* Animated Mascot */}

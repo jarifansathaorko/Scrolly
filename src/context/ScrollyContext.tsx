@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import confetti from 'canvas-confetti';
 import {
   DailyStats,
@@ -13,6 +13,7 @@ import {
   IslandPlacementMode,
 } from '../types';
 import { getTodayKey, getDayOffsetKey } from '../utils/dateKeys';
+import { triggerHaptic, triggerNotificationHaptic } from '../utils/capacitor';
 
 const DEFAULT_LIMITS: AppLimit[] = [
   {
@@ -245,6 +246,7 @@ interface ScrollyContextType {
   activeInterventionApp: string | null;
   historyDailyStats: Record<string, DailyStats>;
   historyAppStats: Record<string, AppStats[]>;
+  dailyTotal: number; // Explicit daily total for bar
   setSelectedAppForSim: (pkg: string) => void;
   simulateScroll: (packageName: string, count?: number) => void;
   toggleNotchBarPreview: () => void;
@@ -272,13 +274,32 @@ const ScrollyContext = createContext<ScrollyContextType | undefined>(undefined);
 export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const todayKey = getTodayKey();
 
-  // Load state from localStorage or use defaults
+  // Helper to get item with migration from old scrolly_ keys to brainrot_
+  const getStoredItem = (newKey: string): string | null => {
+    const val = localStorage.getItem(newKey);
+    if (val) return val;
+    const oldKey = newKey.replace('brainrot_', 'scrolly_');
+    const oldVal = localStorage.getItem(oldKey);
+    if (oldVal) {
+      // Migrate old key to new key
+      try {
+        localStorage.setItem(newKey, oldVal);
+        localStorage.removeItem(oldKey);
+      } catch {}
+      return oldVal;
+    }
+    return null;
+  };
+
+  // Load state from localStorage or use defaults - with daily reset logic
   const [todayStats, setTodayStats] = useState<DailyStats>(() => {
-    const saved = localStorage.getItem('scrolly_today_stats');
+    const saved = getStoredItem('brainrot_today_stats');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
+        // CRITICAL: Only use saved if date matches today - ensures daily counter
         if (parsed.date === todayKey) return parsed;
+        // If date mismatch, we will reset below via appStats logic
       } catch (e) {
         console.error(e);
       }
@@ -293,10 +314,32 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   });
 
   const [appStats, setAppStats] = useState<AppStats[]>(() => {
-    const saved = localStorage.getItem('scrolly_app_stats');
+    const savedTodayStats = getStoredItem('brainrot_today_stats');
+    let isNewDay = true;
+    if (savedTodayStats) {
+      try {
+        const parsed = JSON.parse(savedTodayStats);
+        if (parsed.date === todayKey) isNewDay = false;
+      } catch {}
+    }
+
+    // If new day, reset app stats to 0 - daily tracking only
+    if (isNewDay) {
+      return [
+        { packageName: 'com.instagram.android', appName: 'Instagram', scrollCount: 0 },
+        { packageName: 'com.google.android.youtube', appName: 'Shorts', scrollCount: 0 },
+        { packageName: 'com.zhiliaoapp.musically', appName: 'TikTok', scrollCount: 0 },
+        { packageName: 'com.spotify.music', appName: 'Spotify', scrollCount: 0 },
+        { packageName: 'com.facebook.katana', appName: 'Facebook', scrollCount: 0 },
+      ];
+    }
+
+    const saved = getStoredItem('brainrot_app_stats');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        // Validate that sum matches todayStats if possible
+        return parsed;
       } catch (e) {
         console.error(e);
       }
@@ -311,7 +354,7 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   });
 
   const [limits, setLimits] = useState<AppLimit[]>(() => {
-    const saved = localStorage.getItem('scrolly_limits');
+    const saved = getStoredItem('brainrot_limits');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -323,7 +366,7 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   });
 
   const [profile, setProfile] = useState<UserProfile>(() => {
-    const saved = localStorage.getItem('scrolly_profile');
+    const saved = getStoredItem('brainrot_profile');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -335,7 +378,7 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   });
 
   const [battles, setBattles] = useState<FriendBattle[]>(() => {
-    const saved = localStorage.getItem('scrolly_battles');
+    const saved = getStoredItem('brainrot_battles');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -347,7 +390,7 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   });
 
   const [achievements, setAchievements] = useState<Achievement[]>(() => {
-    const saved = localStorage.getItem('scrolly_achievements');
+    const saved = getStoredItem('brainrot_achievements');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -361,7 +404,7 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [challenges, setChallenges] = useState<HealthyChallenge[]>(DEFAULT_CHALLENGES);
 
   const [notchConfig, setNotchConfig] = useState<NotchConfiguration>(() => {
-    const saved = localStorage.getItem('scrolly_notch_config');
+    const saved = getStoredItem('brainrot_notch_config');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -385,13 +428,13 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // Active intervention modal
   const [activeInterventionApp, setActiveInterventionApp] = useState<string | null>(null);
 
-  // Generate historical data for Stats screen
+  // Generate historical data for Stats screen - separate from daily bar
   const [historyDailyStats] = useState<Record<string, DailyStats>>(() => {
     const history: Record<string, DailyStats> = {};
     const sampleCounts = [48, 62, 35, 95, 78, 54, 36];
     for (let i = 6; i >= 0; i--) {
       const dKey = getDayOffsetKey(-i);
-      const scrolls = i === 0 ? todayStats.totalScrolls : sampleCounts[6 - i] || 50;
+      const scrolls = i === 0 ? 36 : sampleCounts[6 - i] || 50;
       history[dKey] = {
         date: dKey,
         totalScrolls: scrolls,
@@ -418,40 +461,111 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return history;
   });
 
+  // DAILY TOTAL - Explicitly calculated as sum of today's per-app counts
+  // This is the source of truth for the floating bar - DAILY ONLY, never lifetime/weekly/monthly
+  const dailyTotal = useMemo(() => {
+    return appStats.reduce((sum, app) => sum + app.scrollCount, 0);
+  }, [appStats]);
+
+  // Keep todayStats.totalScrolls in sync with dailyTotal (sum of appStats)
+  // Ensures bar always shows daily sum, not lifetime
+  useEffect(() => {
+    setTodayStats((prev) => {
+      if (prev.totalScrolls !== dailyTotal) {
+        return {
+          ...prev,
+          date: todayKey,
+          totalScrolls: dailyTotal,
+          isGoalMet: dailyTotal <= prev.goal,
+        };
+      }
+      return prev;
+    });
+  }, [dailyTotal, todayKey]);
+
+  // Daily reset check - runs every minute to detect date change at midnight
+  useEffect(() => {
+    const checkDateChange = () => {
+      const currentKey = getTodayKey();
+      if (currentKey !== todayStats.date) {
+        console.log(`📅 New day detected: ${todayStats.date} → ${currentKey}, resetting daily counters`);
+        // Reset daily counters to 0 - daily tracking only
+        setTodayStats({
+          date: currentKey,
+          totalScrolls: 0,
+          goal: 100,
+          isGoalMet: true,
+          xpEarned: 0,
+        });
+        setAppStats([
+          { packageName: 'com.instagram.android', appName: 'Instagram', scrollCount: 0 },
+          { packageName: 'com.google.android.youtube', appName: 'Shorts', scrollCount: 0 },
+          { packageName: 'com.zhiliaoapp.musically', appName: 'TikTok', scrollCount: 0 },
+          { packageName: 'com.spotify.music', appName: 'Spotify', scrollCount: 0 },
+          { packageName: 'com.facebook.katana', appName: 'Facebook', scrollCount: 0 },
+        ]);
+      }
+    };
+
+    // Check immediately
+    checkDateChange();
+    
+    // Check every minute for date change (handles midnight reset)
+    const interval = setInterval(checkDateChange, 60 * 1000);
+    
+    // Also check when app becomes visible (user returns next day)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkDateChange();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [todayStats.date]);
+
   // Save changes to localStorage
   useEffect(() => {
-    localStorage.setItem('scrolly_today_stats', JSON.stringify(todayStats));
+    localStorage.setItem('brainrot_today_stats', JSON.stringify(todayStats));
   }, [todayStats]);
 
   useEffect(() => {
-    localStorage.setItem('scrolly_app_stats', JSON.stringify(appStats));
+    localStorage.setItem('brainrot_app_stats', JSON.stringify(appStats));
   }, [appStats]);
 
   useEffect(() => {
-    localStorage.setItem('scrolly_limits', JSON.stringify(limits));
+    localStorage.setItem('brainrot_limits', JSON.stringify(limits));
   }, [limits]);
 
   useEffect(() => {
-    localStorage.setItem('scrolly_profile', JSON.stringify(profile));
+    localStorage.setItem('brainrot_profile', JSON.stringify(profile));
   }, [profile]);
 
   useEffect(() => {
-    localStorage.setItem('scrolly_battles', JSON.stringify(battles));
+    localStorage.setItem('brainrot_battles', JSON.stringify(battles));
   }, [battles]);
 
   useEffect(() => {
-    localStorage.setItem('scrolly_achievements', JSON.stringify(achievements));
+    localStorage.setItem('brainrot_achievements', JSON.stringify(achievements));
   }, [achievements]);
 
   useEffect(() => {
-    localStorage.setItem('scrolly_notch_config', JSON.stringify(notchConfig));
+    localStorage.setItem('brainrot_notch_config', JSON.stringify(notchConfig));
   }, [notchConfig]);
 
-  // Simulate scroll on a selected app
+  // Simulate scroll on a selected app - DAILY TRACKING ONLY
   const simulateScroll = (packageName: string, count: number = 1) => {
     let updatedAppScroll = 0;
     let targetAppName = 'App';
 
+    if (count >= 20) triggerHaptic('heavy');
+    else if (count >= 5) triggerHaptic('medium');
+    else triggerHaptic('light');
+
+    // Update per-app daily count - this is daily only
     setAppStats((prev) =>
       prev.map((app) => {
         if (app.packageName === packageName) {
@@ -463,12 +577,8 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       })
     );
 
-    const newTotal = todayStats.totalScrolls + count;
-    setTodayStats((prev) => ({
-      ...prev,
-      totalScrolls: newTotal,
-      isGoalMet: newTotal <= prev.goal,
-    }));
+    // todayStats will auto-sync via useEffect from dailyTotal (sum of appStats)
+    // This ensures daily bar always shows sum of today's per-app counts
 
     setProfile((prev) => ({
       ...prev,
@@ -476,10 +586,10 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       currentXp: prev.currentXp + Math.max(1, Math.floor(count * 0.5)),
     }));
 
-    // Update battles user scroll count
+    // Update battles with new daily total (calculated from appStats)
     setBattles((prev) =>
       prev.map((b) => {
-        const nextUser = newTotal;
+        const nextUser = dailyTotal + count;
         const status =
           nextUser < b.friendScrolls
             ? 'WINNING'
@@ -494,9 +604,9 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       })
     );
 
-    // Check limit enforcement for this app
     const appLimit = limits.find((l) => l.packageName === packageName);
     if (appLimit && appLimit.isEnabled && updatedAppScroll >= appLimit.dailyLimit) {
+      triggerHaptic('heavy');
       setActiveInterventionApp(targetAppName);
     }
   };
@@ -533,6 +643,8 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const ch = challenges.find((c) => c.id === challengeId);
     if (!ch) return;
 
+    triggerNotificationHaptic();
+
     confetti({
       particleCount: 50,
       spread: 60,
@@ -553,7 +665,6 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       };
     });
 
-    // Expand daily goal by rewardScrolls
     setTodayStats((prev) => ({
       ...prev,
       goal: prev.goal + ch.rewardScrolls,
@@ -583,10 +694,10 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       id: `battle_${Date.now()}`,
       friendName,
       friendUsername,
-      userScrolls: todayStats.totalScrolls,
+      userScrolls: dailyTotal,
       friendScrolls: randomFriendScore,
       date: todayKey,
-      status: todayStats.totalScrolls < randomFriendScore ? 'WINNING' : 'LOSING',
+      status: dailyTotal < randomFriendScore ? 'WINNING' : 'LOSING',
     };
     setBattles((prev) => [newBattle, ...prev]);
   };
@@ -642,8 +753,9 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const resetAllData = () => {
     localStorage.clear();
+    const currentKey = getTodayKey();
     setTodayStats({
-      date: todayKey,
+      date: currentKey,
       totalScrolls: 0,
       goal: 100,
       isGoalMet: true,
@@ -684,6 +796,7 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         activeInterventionApp,
         historyDailyStats,
         historyAppStats,
+        dailyTotal,
         setSelectedAppForSim,
         simulateScroll,
         toggleNotchBarPreview,

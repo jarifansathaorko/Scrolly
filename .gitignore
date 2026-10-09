@@ -17,3 +17,22 @@ local.properties
 .env
 debug.keystore
 google-services.json
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+android/app/build/
+android/build/
+android/.gradle/
+android/app/.cxx/
+*.apk
+*.aab
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db

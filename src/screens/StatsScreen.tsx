@@ -6,12 +6,13 @@ import { ScrollyCharacter } from '../components/ScrollyCharacter';
 import { ChevronLeft, ChevronRight, TrendingDown, Sparkles } from 'lucide-react';
 
 export const StatsScreen: React.FC = () => {
-  const { todayStats, appStats, historyDailyStats, historyAppStats } = useScrolly();
+  const { todayStats, appStats, dailyTotal, historyDailyStats, historyAppStats } = useScrolly();
   const [timeframe, setTimeframe] = useState<StatsTimeframe>('WEEK');
   const [periodOffset, setPeriodOffset] = useState<number>(0);
   const [selectedBarIndex, setSelectedBarIndex] = useState<number | null>(null);
 
-  // Timeframe calculation
+  // Timeframe calculation - Note: totalReels here is for analytics history, NOT for the floating bar
+  // The floating bar (NotchBarPreview) uses dailyTotal ONLY - today's daily scrolls
   let periodLabel = '';
   let chartBars: ChartBarData[] = [];
   let totalReels = 0;
@@ -27,7 +28,7 @@ export const StatsScreen: React.FC = () => {
         ? 'Yesterday'
         : `${Math.abs(periodOffset)} days ago`;
 
-    totalReels = periodOffset === 0 ? todayStats.totalScrolls : 52;
+    totalReels = periodOffset === 0 ? dailyTotal : 52;
     secondaryStat = Math.round(totalReels * 0.4);
     secondaryStatLabel = 'Peak evening';
 
@@ -50,7 +51,7 @@ export const StatsScreen: React.FC = () => {
     periodLabel = periodOffset === 0 ? 'This Week' : `${Math.abs(periodOffset)} weeks ago`;
 
     const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const mockCounts = [48, 62, 35, 95, 78, 54, todayStats.totalScrolls];
+    const mockCounts = [48, 62, 35, 95, 78, 54, dailyTotal];
     totalReels = mockCounts.reduce((a, b) => a + b, 0);
     secondaryStat = Math.round(totalReels / 7);
     secondaryStatLabel = 'Daily avg.';
@@ -67,7 +68,7 @@ export const StatsScreen: React.FC = () => {
     periodLabel = periodOffset === 0 ? 'This Month' : `${Math.abs(periodOffset)} months ago`;
 
     const weekLabels = ['Week 1', 'Week 2', 'Week 3', 'Week 4'];
-    const weekCounts = [340, 290, 310, 260 + todayStats.totalScrolls];
+    const weekCounts = [340, 290, 310, 260 + dailyTotal];
     totalReels = weekCounts.reduce((a, b) => a + b, 0);
     secondaryStat = Math.round(totalReels / 30);
     secondaryStatLabel = 'Daily avg.';
@@ -85,7 +86,7 @@ export const StatsScreen: React.FC = () => {
     periodLabel = periodOffset === 0 ? 'This Year' : `${Math.abs(periodOffset)} years ago`;
 
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct'];
-    const monthCounts = [1200, 1150, 980, 1050, 920, 890, 840, 780, 750, 700 + todayStats.totalScrolls];
+    const monthCounts = [1200, 1150, 980, 1050, 920, 890, 840, 780, 750, 700 + dailyTotal];
     totalReels = monthCounts.reduce((a, b) => a + b, 0);
     secondaryStat = Math.round(totalReels / 10);
     secondaryStatLabel = 'Monthly avg.';
@@ -107,8 +108,8 @@ export const StatsScreen: React.FC = () => {
     appName: app.appName,
     count: app.scrollCount,
     fractionOfTotal:
-      todayStats.totalScrolls > 0
-        ? app.scrollCount / todayStats.totalScrolls
+      dailyTotal > 0
+        ? app.scrollCount / dailyTotal
         : 0,
   }));
 
@@ -292,7 +293,7 @@ export const StatsScreen: React.FC = () => {
           <Sparkles className="w-5 h-5" />
         </div>
         <div>
-          <div className="text-xs font-bold text-[#21005D]">Scrolly Mindful Insight</div>
+          <div className="text-xs font-bold text-[#21005D]">BrainRot Mindful Insight</div>
           <p className="text-xs text-[#49454F] mt-0.5 leading-relaxed">{insightMessage}</p>
         </div>
       </div>

@@ -14,7 +14,7 @@ import {
 import confetti from 'canvas-confetti';
 
 export const BattlesScreen: React.FC = () => {
-  const { battles, profile, todayStats, addFriendBattle } = useScrolly();
+  const { battles, profile, todayStats, dailyTotal, addFriendBattle } = useScrolly();
 
   const [isChallengeModalOpen, setIsChallengeModalOpen] = useState(false);
   const [friendName, setFriendName] = useState('');
@@ -25,15 +25,15 @@ export const BattlesScreen: React.FC = () => {
     id: 'featured',
     friendName: 'Alex Rivera',
     friendUsername: 'arivera',
-    userScrolls: todayStats.totalScrolls,
+    userScrolls: dailyTotal,
     friendScrolls: 93,
     date: 'Today',
     status: 'WINNING' as const,
   };
 
-  const isUserWinning = todayStats.totalScrolls < featuredBattle.friendScrolls;
-  const isTied = todayStats.totalScrolls === featuredBattle.friendScrolls;
-  const diff = Math.abs(featuredBattle.friendScrolls - todayStats.totalScrolls);
+  const isUserWinning = dailyTotal < featuredBattle.friendScrolls;
+  const isTied = dailyTotal === featuredBattle.friendScrolls;
+  const diff = Math.abs(featuredBattle.friendScrolls - dailyTotal);
 
   const handleCreateChallenge = (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,12 +82,12 @@ export const BattlesScreen: React.FC = () => {
           {/* Left: You */}
           <div className="flex flex-col items-center text-center">
             <div className="relative">
-              <ScrollyCharacter scrollCount={todayStats.totalScrolls} size={70} />
+              <ScrollyCharacter scrollCount={dailyTotal} size={70} />
             </div>
             <div className="text-xs font-bold text-[#1D1B20] mt-1">You</div>
             <div className="text-[10px] text-[#79747E]">@{profile.username}</div>
             <div className="text-2xl font-black text-[#21005D] mt-1">
-              {todayStats.totalScrolls}
+              {dailyTotal}
               <span className="text-[10px] font-normal text-[#79747E] ml-0.5">reels</span>
             </div>
           </div>
@@ -163,8 +163,8 @@ export const BattlesScreen: React.FC = () => {
         <h3 className="text-sm font-bold text-[#1D1B20] px-1">Active Challenges</h3>
 
         {battles.map((battle) => {
-          const winning = todayStats.totalScrolls < battle.friendScrolls;
-          const tied = todayStats.totalScrolls === battle.friendScrolls;
+          const winning = dailyTotal < battle.friendScrolls;
+          const tied = dailyTotal === battle.friendScrolls;
 
           return (
             <div
@@ -177,7 +177,7 @@ export const BattlesScreen: React.FC = () => {
                   <div className="text-xs font-bold text-[#1D1B20]">{battle.friendName}</div>
                   <div className="text-[10px] text-[#79747E]">@{battle.friendUsername}</div>
                   <div className="text-[11px] font-semibold text-[#49454F] mt-0.5">
-                    You: <strong className="text-[#21005D]">{todayStats.totalScrolls}</strong> vs
+                    You: <strong className="text-[#21005D]">{dailyTotal}</strong> vs
                     Them: <strong className="text-[#21005D]">{battle.friendScrolls}</strong>
                   </div>
                 </div>
@@ -224,7 +224,7 @@ export const BattlesScreen: React.FC = () => {
         <div className="space-y-2">
           {[
             { rank: 1, name: 'Sarah Chen', count: 24, streak: 9, isYou: false },
-            { rank: 2, name: 'You (aorko)', count: todayStats.totalScrolls, streak: profile.streakDays, isYou: true },
+            { rank: 2, name: 'You (aorko)', count: dailyTotal, streak: profile.streakDays, isYou: true },
             { rank: 3, name: 'Marcus Vance', count: 36, streak: 4, isYou: false },
             { rank: 4, name: 'Alex Rivera', count: 93, streak: 2, isYou: false },
           ]

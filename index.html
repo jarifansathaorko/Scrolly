@@ -2,15 +2,48 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Scrolly</title>
+    <link rel="icon" type="image/png" href="/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icon-180.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#6750A4" />
+    <meta name="background-color" content="#FEF7FF" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="BrainRot" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="BrainRot" />
+    <meta name="msapplication-TileColor" content="#6750A4" />
+    <meta name="msapplication-tap-highlight" content="no" />
+    <meta name="format-detection" content="telephone=no" />
+    <title>BrainRot - Take Back Control</title>
     <meta name="description" content="See how much you scroll. Take back control with playful gamified tracking, brain mascot states, app breakdown, and friend battles." />
-    <meta property="og:title" content="Scrolly" />
+    <meta property="og:title" content="BrainRot" />
     <meta property="og:description" content="See how much you scroll. Take back control with playful gamified tracking, brain mascot states, app breakdown, and friend battles." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/icon-512.png" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="BrainRot" />
+    <meta name="twitter:description" content="Take back your attention - gamified scroll tracking" />
+    <style>
+      html { background-color: #FEF7FF; }
+      body { background-color: #FEF7FF; overscroll-behavior: none; }
+      :root {
+        --sat: env(safe-area-inset-top);
+        --sar: env(safe-area-inset-right);
+        --sab: env(safe-area-inset-bottom);
+        --sal: env(safe-area-inset-left);
+      }
+    </style>
   </head>
-  <body class="bg-[#FEF7FF] text-[#1D1B20] antialiased select-none">
+  <body class="bg-[#FEF7FF] text-[#1D1B20] antialiased select-none touch-manipulation">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <noscript>
+      <div style="padding:2rem;text-align:center;font-family:system-ui">
+        <h1>🧠 BrainRot</h1>
+        <p>Please enable JavaScript to use BrainRot and take back control of your scrolling.</p>
+      </div>
+    </noscript>
   </body>
 </html>

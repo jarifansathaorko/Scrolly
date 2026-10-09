@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="colorPrimary">#6750A4</color>
+    <color name="colorPrimaryDark">#21005D</color>
+    <color name="colorAccent">#D0BCFF</color>
+    <color name="backgroundLight">#FEF7FF</color>
+    <color name="surfaceLight">#F3EDF7</color>
+    <color name="surfaceVariant">#E8DEF8</color>
+    <color name="onSurface">#1D1B20</color>
+    <color name="splashBackground">#FEF7FF</color>
+</resources>
