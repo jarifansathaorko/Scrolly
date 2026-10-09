@@ -56,41 +56,71 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Build web
-        run: npm run build
-      - name: Sync Capacitor
         run: |
-          npx cap copy android
-          npx cap update android
+          npm run build
+          ls -lh dist/
+      - name: Sync Capacitor
+        id: sync
+        run: |
+          set +e
+          echo "=== CAP DOCTOR ==="
+          npx cap doctor
+          echo "=== CAP CONFIG ==="
+          cat capacitor.config.ts
+          echo "=== ANDROID DIR ==="
+          ls -la android/
+          echo "=== TRY COPY ==="
+          npx cap copy android > /tmp/cap-copy.log 2>&1
+          echo "copy exit: $?"
+          cat /tmp/cap-copy.log
+          echo "=== TRY UPDATE ==="
+          npx cap update android > /tmp/cap-update.log 2>&1
+          echo "update exit: $?"
+          cat /tmp/cap-update.log
+          echo "=== TRY SYNC ==="
+          npx cap sync android > /tmp/cap-sync.log 2>&1
+          SYNC_EXIT=$?
+          echo "sync exit: $SYNC_EXIT"
+          cat /tmp/cap-sync.log
+          cat /tmp/cap-copy.log /tmp/cap-update.log /tmp/cap-sync.log > ./full-sync.log
+          exit $SYNC_EXIT
+      - name: Save logs to repo on failure
+        if: failure()
+        run: |
+          git config user.name "CI Bot"
+          git config user.email "ci@brainrot.app"
+          git fetch origin debug-logs || true
+          git checkout -B debug-logs
+          cp /tmp/cap-copy.log ./cap-copy.log || echo "no copy log" > ./cap-copy.log
+          cp /tmp/cap-update.log ./cap-update.log || echo "no update log" > ./cap-update.log
+          cp /tmp/cap-sync.log ./cap-sync.log || echo "no sync log" > ./cap-sync.log
+          cat ./cap-copy.log ./cap-update.log ./cap-sync.log > ./full-sync.log
+          echo "=== FULL LOG ==="
+          cat ./full-sync.log
+          git add cap-copy.log cap-update.log cap-sync.log full-sync.log
+          git commit -m "ci: sync failure logs [run $GITHUB_RUN_ID]" || echo "no changes"
+          git push origin debug-logs --force
       - name: Build Debug APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace --info 2>&1 | tee ../gradle-build.log
-          echo "Gradle exit code: ${PIPESTATUS[0]}"
-          ls -lh app/build/outputs/apk/debug/ || echo "no apk dir"
-          cat ../gradle-build.log | tail -n 200
-      - name: Upload gradle log on failure
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../gradle-build.log
+          ls -lh app/build/outputs/apk/debug/ || true
+      - name: Save gradle log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gradle-log
-          path: gradle-build.log
-          retention-days: 7
+        run: |
+          git config user.name "CI Bot"
+          git config user.email "ci@brainrot.app"
+          git fetch origin debug-logs || true
+          git checkout -B debug-logs
+          cp ../gradle-build.log ./gradle-build.log || cp gradle-build.log ./gradle-build.log || echo "no gradle log" > ./gradle-build.log
+          cat ./gradle-build.log | tail -n 200
+          git add gradle-build.log
+          git commit -m "ci: gradle failure logs [run $GITHUB_RUN_ID]" || true
+          git push origin debug-logs --force
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: brainrot-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
-      - name: Build Release APK
-        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/arena/')
-        run: |
-          cd android
-          ./gradlew assembleRelease --no-daemon
-      - name: Upload Release APK
-        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/arena/')
-        uses: actions/upload-artifact@v4
-        with:
-          name: brainrot-release-apk
-          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
-          retention-days: 30
