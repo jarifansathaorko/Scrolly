@@ -227,6 +227,8 @@ const DEFAULT_NOTCH_CONFIG: NotchConfiguration = {
   },
 };
 
+export type ThemeMode = 'light' | 'dark' | 'system';
+
 interface ScrollyContextType {
   todayStats: DailyStats;
   appStats: AppStats[];
@@ -247,6 +249,10 @@ interface ScrollyContextType {
   historyDailyStats: Record<string, DailyStats>;
   historyAppStats: Record<string, AppStats[]>;
   dailyTotal: number; // Explicit daily total for bar
+  theme: ThemeMode;
+  isDarkMode: boolean;
+  setTheme: (theme: ThemeMode) => void;
+  toggleTheme: () => void;
   setSelectedAppForSim: (pkg: string) => void;
   simulateScroll: (packageName: string, count?: number) => void;
   toggleNotchBarPreview: () => void;
@@ -417,6 +423,57 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const [isNotchPreviewVisible, setIsNotchPreviewVisible] = useState<boolean>(true);
   const [selectedAppForSim, setSelectedAppForSim] = useState<string>('com.instagram.android');
+
+  // Theme - dark mode
+  const [theme, setThemeState] = useState<ThemeMode>(() => {
+    const saved = getStoredItem('brainrot_theme') as ThemeMode | null;
+    if (saved && ['light', 'dark', 'system'].includes(saved)) return saved;
+    return 'system';
+  });
+
+  const isDarkMode = useMemo(() => {
+    if (theme === 'dark') return true;
+    if (theme === 'light') return false;
+    // system
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }, [theme]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (isDarkMode) {
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+    }
+    localStorage.setItem('brainrot_theme', theme);
+  }, [isDarkMode, theme]);
+
+  useEffect(() => {
+    // Listen for system theme changes when in system mode
+    if (theme !== 'system') return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = () => {
+      const root = document.documentElement;
+      if (mq.matches) root.classList.add('dark');
+      else root.classList.remove('dark');
+    };
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, [theme]);
+
+  const setTheme = (newTheme: ThemeMode) => {
+    setThemeState(newTheme);
+    triggerHaptic('light');
+  };
+
+  const toggleTheme = () => {
+    setThemeState(prev => {
+      if (prev === 'light') return 'dark';
+      if (prev === 'dark') return 'system';
+      return 'light';
+    });
+    triggerHaptic('medium');
+  };
 
   // Permissions simulation
   const [isServiceActive, setIsServiceActive] = useState<boolean>(true);
@@ -797,6 +854,10 @@ export const ScrollyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         historyDailyStats,
         historyAppStats,
         dailyTotal,
+        theme,
+        isDarkMode,
+        setTheme,
+        toggleTheme,
         setSelectedAppForSim,
         simulateScroll,
         toggleNotchBarPreview,

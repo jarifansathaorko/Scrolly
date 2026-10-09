@@ -12,7 +12,7 @@ import { isNative, isAndroid } from './utils/capacitor';
 
 const MainApp: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<ScrollyTab>('HOME');
-  const { notchConfig } = useScrolly();
+  const { notchConfig, isDarkMode } = useScrolly();
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -37,7 +37,7 @@ const MainApp: React.FC = () => {
 
   return (
     <div 
-      className="min-h-screen bg-[#FEF7FF] text-[#1D1B20] flex flex-col justify-between relative selection:bg-[#EADDFF] selection:text-[#21005D]"
+      className="min-h-screen bg-[#FEF7FF] dark:bg-[#141218] text-[#1D1B20] dark:text-[#E6E0E9] flex flex-col justify-between relative selection:bg-[#EADDFF] dark:selection:bg-[#4F378B] selection:text-[#21005D] dark:selection:text-[#EADDFF] transition-colors duration-300"
       style={{
         paddingTop: isNative ? 'env(safe-area-inset-top)' : undefined,
         paddingBottom: isNative ? 'env(safe-area-inset-bottom)' : undefined,
@@ -49,7 +49,7 @@ const MainApp: React.FC = () => {
       {notchConfig.showCutoutGuide && (
         <div className="fixed top-0 left-0 right-0 pointer-events-none z-40 flex justify-center" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
           <div
-            className="h-8 bg-red-500/20 border border-red-500/40 rounded-full flex items-center justify-center text-[10px] text-red-700 font-bold px-3 backdrop-blur-sm"
+            className="h-8 bg-red-500/20 dark:bg-red-900/30 border border-red-500/40 dark:border-red-400/40 rounded-full flex items-center justify-center text-[10px] text-red-700 dark:text-red-300 font-bold px-3 backdrop-blur-sm"
             style={{ width: `${Math.max(40, notchConfig.cutoutGapWidth || 60)}px` }}
           >
             Camera
@@ -70,8 +70,8 @@ const MainApp: React.FC = () => {
       </div>
 
       {isNative && (
-        <div className="fixed bottom-20 right-2 pointer-events-none opacity-20 text-[8px] font-mono">
-          {isAndroid ? 'ANDROID' : 'NATIVE'} • v1.0
+        <div className="fixed bottom-20 right-2 pointer-events-none opacity-20 text-[8px] font-mono dark:text-white">
+          {isAndroid ? 'ANDROID' : 'NATIVE'} • v1.0 {isDarkMode ? '• DARK' : '• LIGHT'}
         </div>
       )}
     </div>
