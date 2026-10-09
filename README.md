@@ -35,45 +35,45 @@
 
 ```mermaid
 flowchart TD
-    A[User opens BrainRot] --> B[HomeScreen: TODAY'S SCROLLS • DAILY ONLY]
-    B --> C[ScrollyCharacter reacts: Fresh -> Nuclear]
-    B --> D[NotchBarPreview: Floating Pill]
-    D -->|Tap| E[Glass Tile Expanded: Daily Summary Only]
-    B --> F[Active Apps Grid: Instagram, Shorts, TikTok, Spotify, FB]
-    F -->|Select App + Simulate +1/+5/+20| G[Context: appStats + dailyTotal]
-    G --> H[dailyTotal = sum(appStats) -> Bar + Hero Count]
-    H --> I{>= dailyGoal?}
-    I -->|No| J[HEALTHY / WARNING pill]
-    I -->|Yes| K[BlockScreen Interceptor: Fullscreen Glass]
-    K --> L[Choose Healthy Challenge: Walk, Breathe, Phone-Down]
-    L --> M[Earn +Scrolls & XP -> Unblock]
-    B --> N[BattlesScreen: dailyTotal vs Friends]
-    B --> O[StatsScreen: History separate from daily bar]
-    B --> P[Profile: Streak, Achievements, XP]
-    G --> Q[Midnight Reset: interval 60s + visibilitychange]
-    Q --> R[appStats -> 0, todayStats.totalScrolls -> 0]
+    A["User opens BrainRot"] --> B["HomeScreen: TODAYS SCROLLS DAILY ONLY"]
+    B --> C["ScrollyCharacter reacts: Fresh to Nuclear"]
+    B --> D["NotchBarPreview: Floating Pill"]
+    D -->|Tap| E["Glass Tile Expanded: Daily Summary Only"]
+    B --> F["Active Apps Grid: Instagram, Shorts, TikTok, Spotify, FB"]
+    F -->|Select App + Simulate| G["Context: appStats + dailyTotal"]
+    G --> H["dailyTotal sum appStats to Bar and Hero Count"]
+    H --> I{">= dailyGoal?"}
+    I -->|No| J["HEALTHY / WARNING pill"]
+    I -->|Yes| K["BlockScreen Interceptor: Fullscreen Glass"]
+    K --> L["Choose Healthy Challenge: Walk, Breathe, Phone-Down"]
+    L --> M["Earn Scrolls and XP to Unblock"]
+    B --> N["BattlesScreen: dailyTotal vs Friends"]
+    B --> O["StatsScreen: History separate from daily bar"]
+    B --> P["Profile: Streak, Achievements, XP"]
+    G --> Q["Midnight Reset: interval 60s + visibilitychange"]
+    Q --> R["appStats reset to 0, todayStats reset to 0"]
 ```
 
 ### 2. Daily Tracking — Source of Truth
 
 ```mermaid
 flowchart LR
-    subgraph DailyOnly [Daily Only Layer]
-        A[appStats: Instagram=18, Shorts=10, TikTok=6, Spotify=0, FB=2] --> B[dailyTotal = sum = 36]
-        B --> C[todayStats.totalScrolls = dailyTotal via useEffect sync]
-        C --> D[NotchBarPreview compact: 36 today]
-        C --> E[HomeScreen giant: 36]
-        C --> F[Battles: userScrolls = dailyTotal]
-        C --> G[Stats today analytics: dailyTotal]
+    subgraph DailyOnly ["Daily Only Layer"]
+        A["appStats: Instagram 18, Shorts 10, TikTok 6, Spotify 0, FB 2"] --> B["dailyTotal sum = 36"]
+        B --> C["todayStats totalScrolls = dailyTotal via useEffect sync"]
+        C --> D["NotchBarPreview compact: 36 today"]
+        C --> E["HomeScreen giant: 36"]
+        C --> F["Battles: userScrolls = dailyTotal"]
+        C --> G["Stats today analytics: dailyTotal"]
     end
-    subgraph History [Separate History]
-        H[historyDailyStats: last 7 days sample 48,62,35...] --> I[Stats Week/Month/Year]
-        J[profile.allTimeScrolls: 14832 lifetime] --> K[ProfileScreen separate]
+    subgraph History ["Separate History"]
+        H["historyDailyStats: last 7 days sample 48 62 35"] --> I["Stats Week Month Year"]
+        J["profile allTimeScrolls: 14832 lifetime"] --> K["ProfileScreen separate"]
     end
-    subgraph Reset [Midnight Reset]
-        L[setInterval 60s check date] --> M{new day?}
-        N[visibilitychange listener] --> M
-        M -->|Yes| O[Reset appStats to 0, todayStats to 0]
+    subgraph Reset ["Midnight Reset"]
+        L["setInterval 60s check date"] --> M{"new day?"}
+        N["visibilitychange listener"] --> M
+        M -->|Yes| O["Reset appStats to 0, todayStats to 0"]
     end
 ```
 
@@ -87,31 +87,32 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    subgraph Context [ScrollyContext.tsx]
-        A[todayStats: DailyStats] --- B[appStats: AppStats[]]
-        B --- C[dailyTotal: number]
-        A --- D[limits: AppLimit[]]
-        A --- E[profile: UserProfile]
-        A --- F[battles: FriendBattle[]]
-        A --- G[achievements: Achievement[]]
-        A --- H[notchConfig: NotchConfiguration]
-        A --- I[isNotchPreviewVisible]
-        C --> J[Home, NotchBar, Battles, Stats consumers]
+    subgraph Context ["ScrollyContext.tsx"]
+        A["todayStats: DailyStats"] --- B["appStats: AppStats array"]
+        B --- C["dailyTotal: number"]
+        A --- D["limits: AppLimit array"]
+        A --- E["profile: UserProfile"]
+        A --- F["battles: FriendBattle array"]
+        A --- G["achievements: Achievement array"]
+        A --- H["notchConfig: NotchConfiguration"]
+        A --- I["isNotchPreviewVisible"]
+        C --> J["Home, NotchBar, Battles, Stats consumers"]
     end
-    subgraph Persist [localStorage]
-        K[brainrot_today_stats] --- A
-        L[brainrot_app_stats] --- B
-        M[brainrot_limits] --- D
-        N[brainrot_profile] --- E
-        O[brainrot_battles] --- F
-        P[brainrot_achievements] --- G
-        Q[brainrot_notch_config] --- H
+    subgraph Persist ["localStorage"]
+        K["brainrot_today_stats"] --- A
+        L["brainrot_app_stats"] --- B
+        M["brainrot_limits"] --- D
+        N["brainrot_profile"] --- E
+        O["brainrot_battles"] --- F
+        P["brainrot_achievements"] --- G
+        Q["brainrot_notch_config"] --- H
     end
     subgraph Actions
-        R[simulateScroll(pkg, n)] --> B
-        S[setSelectedAppForSim] --> T[selectedAppForSim]
-        U[toggleNotchBarPreview] --> I
-        V[completeChallenge] --> D & E
+        R["simulateScroll pkg n"] --> B
+        S["setSelectedAppForSim"] --> T["selectedAppForSim"]
+        U["toggleNotchBarPreview"] --> I
+        V["completeChallenge"] --> D
+        V --> E
     end
 ```
 
@@ -119,11 +120,20 @@ flowchart TD
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Compact: isExpanded=false
-    Compact --> Expanded: onClick pill
-    Expanded --> Compact: backdrop click / Minus / Collapse
-    Compact: Black pill 36px h, 195px min-w, backdrop-blur-2xl, app icon + count + dot
-    Expanded: Glass tile 340px, rounded 20px, bg white/70 blur 20px, mascot 52px glass, TODAY DAILY ONLY, 0/100, HEALTHY, progress 8px, Daily: X scrolls + date
+    [*] --> Compact
+    Compact --> Expanded: Tap pill
+    Expanded --> Compact: Backdrop click or Collapse
+
+    state Compact {
+        [*] --> C1
+        C1: Black pill 36px h 195px min-w backdrop blur 2xl
+        C1: App icon + count + dot pulse
+    }
+    state Expanded {
+        [*] --> E1
+        E1: Glass tile 340px rounded 20px white 70 blur 20px
+        E1: Mascot 52px glass, TODAY DAILY ONLY, 0 per 100, HEALTHY, progress 8px
+    }
 ```
 
 **Glass spec (expanded minimal):**
@@ -137,41 +147,53 @@ stateDiagram-v2
 
 ```mermaid
 flowchart TB
-    subgraph Web [Vite + React Web App]
-        A[App.tsx: Tab Router + Safe Areas + brainrot:openTab event]
-        B[HomeScreen: Hero D0BCFF card + Active Apps + NotchCustomizer + Live Tester]
-        C[StatsScreen: Day/Week/Month/Year + Quarter-hour + Distribution]
-        D[BattlesScreen: Duels + Leaderboard]
-        E[BlockScreen: Glass Interceptor + Challenges]
-        F[ProfileScreen: Streak + Achievements]
-        G[NotchBarPreview: Floating Pill + Glass Tile]
-        H[ScrollyCharacter: 6 states SVG]
-        I[AppIconBadge: Gradient icons]
-        J[ScrollyContext: State + Haptics + Midnight Reset]
-        K[capacitor.ts: triggerHaptic, openTab event]
-        L[dateKeys.ts: getTodayKey]
+    subgraph Web ["Vite + React Web App"]
+        A["App.tsx: Tab Router + Safe Areas + openTab event"]
+        B["HomeScreen: Hero D0BCFF card + Active Apps + NotchCustomizer + Live Tester"]
+        C["StatsScreen: Day Week Month Year + Quarter-hour + Distribution"]
+        D["BattlesScreen: Duels + Leaderboard"]
+        E["BlockScreen: Glass Interceptor + Challenges"]
+        F["ProfileScreen: Streak + Achievements"]
+        G["NotchBarPreview: Floating Pill + Glass Tile"]
+        H["ScrollyCharacter: 6 states SVG"]
+        I["AppIconBadge: Gradient icons"]
+        J["ScrollyContext: State + Haptics + Midnight Reset"]
+        K["capacitor.ts: triggerHaptic, openTab event"]
+        L["dateKeys.ts: getTodayKey"]
     end
-    subgraph Native [Capacitor 8 Android]
-        M[MainActivity.java: com.brainrot.app, edge-to-edge, WebView perf, status bar #FEF7FF]
-        N[AndroidManifest.xml: INTERNET, SYSTEM_ALERT_WINDOW, VIBRATE, REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, deep links brainrot.app + web+brainrot + com.brainrot.app]
-        O[res/mipmap: ic_launcher 48-xxxhdpi + adaptive anydpi-v26]
-        P[res/drawable: splash.png + splash.xml]
-        Q[res/values: strings BrainRot, colors #6750A4, styles AppTheme.NoActionBarLaunch]
-        R[build.gradle: namespace com.brainrot.app, appId com.brainrot.app, compileSdk 34, Java 17]
+    subgraph Native ["Capacitor 8 Android"]
+        M["MainActivity.java: com.brainrot.app, edge-to-edge, WebView perf, status bar FEF7FF"]
+        N["AndroidManifest.xml: Permissions + deep links brainrot.app + web+brainrot + com.brainrot.app"]
+        O["res mipmap: ic_launcher 48-xxxhdpi + adaptive anydpi-v26"]
+        P["res drawable: splash.png + splash.xml"]
+        Q["res values: strings BrainRot, colors 6750A4, styles AppTheme"]
+        R["build.gradle: namespace com.brainrot.app, appId com.brainrot.app, compileSdk 34, Java 17"]
     end
-    subgraph Build [Build Pipeline]
-        S[package.json: brainrot, scripts dev/build/build:mobile/android:build]
-        T[capacitor.config.ts: appId com.brainrot.app, appName BrainRot, webDir dist, plugins SplashScreen StatusBar Keyboard Haptics App]
-        U[public/manifest.json: BrainRot - Take Back Control, short_name BrainRot, theme #6750A4, icons 48-1024, shortcuts Stats/Battles/Block]
-        V[build.gradle.kts: root orchestrator assembleDebug -> buildWeb + sync + gradlew assembleDebug -> brainrot-debug.apk]
-        W[scripts/build-mobile.sh: ci install + build + cap sync + gradlew assembleDebug]
-        X[.github/workflows/mobile-build.yml: Node 20 + Java 17 + Android SDK 34 + cap copy/update + assembleDebug -> artifact brainrot-debug-apk]
+    subgraph Build ["Build Pipeline"]
+        S["package.json: brainrot, scripts dev build mobile android"]
+        T["capacitor.config.ts: appId com.brainrot.app, appName BrainRot, webDir dist, plugins"]
+        U["public manifest.json: BrainRot Take Back Control, short_name BrainRot, theme 6750A4"]
+        V["build.gradle.kts: root orchestrator assembleDebug to APK"]
+        W["scripts build-mobile.sh: ci install + build + cap sync + gradlew"]
+        X["GitHub workflows: Node 20 + Java 17 + Android SDK 34 + cap copy update + assembleDebug"]
     end
-    J --> B & C & D & E & F & G & H
-    A --> B & C & D & E & F
+    J --> B
+    J --> C
+    J --> D
+    J --> E
+    J --> F
+    J --> G
+    J --> H
+    A --> B
+    A --> C
+    A --> D
+    A --> E
+    A --> F
     G --> J
     B --> J
-    S --> T --> M & N
+    S --> T
+    T --> M
+    T --> N
     T --> U
     V --> S
     W --> V
@@ -304,16 +326,16 @@ sequenceDiagram
     participant Mascot as ScrollyCharacter
 
     User->>Home: Tap +1 Scroll (selectedApp Instagram)
-    Home->>Ctx: simulateScroll(com.instagram.android, 1)
-    Ctx->>Ctx: appStats[Instagram].scrollCount +=1
-    Ctx->>Ctx: dailyTotal = sum(appStats) recalculated via useMemo
-    Ctx->>Ctx: todayStats.totalScrolls = dailyTotal (useEffect sync)
-    Ctx->>LS: setItem brainrot_app_stats, brainrot_today_stats
-    Ctx->>Ctx: triggerHaptic(light)
-    Ctx->>Bar: dailyTotal prop -> bounce animation scale 1.02 + dot pulse
-    Ctx->>Mascot: scrollCount dailyTotal -> getMascotState -> re-render eyes/mouth
-    Ctx->>Home: giant count updates TODAY'S SCROLLS DAILY ONLY
-    Note over Ctx,Bar: If dailyTotal >= goal, BlockScreen will show on next app switch
+    Home->>Ctx: simulateScroll(instagram, 1)
+    Ctx->>Ctx: appStats Instagram scrollCount plus 1
+    Ctx->>Ctx: dailyTotal sum appStats recalculated via useMemo
+    Ctx->>Ctx: todayStats totalScrolls = dailyTotal via useEffect sync
+    Ctx->>LS: setItem brainrot_app_stats and today_stats
+    Ctx->>Ctx: triggerHaptic light
+    Ctx->>Bar: dailyTotal prop bounce animation scale 1.02 + dot pulse
+    Ctx->>Mascot: scrollCount dailyTotal getMascotState re-render eyes mouth
+    Ctx->>Home: giant count updates TODAYS SCROLLS DAILY ONLY
+    Note over Ctx,Bar: If dailyTotal over goal, BlockScreen shows on next switch
 ```
 
 ---
@@ -324,7 +346,7 @@ sequenceDiagram
 - **Container**: `340px` max `92vw`, `rounded 20px`, `bg-white/70 backdrop-blur-20px border-white/70 shadow 0_16px_40px_-12px_rgba(103,80,164,0.2) + inset 0 1px 0 0 rgba(255,255,255,0.8)`
 - **Mesh**: Two blurred blobs `D0BCFF/25` and `E8DEF8/40` + white gradient overlay `from-white/60 via-white/10 to-white/20`
 - **Mascot tile**: `52px rounded 16px bg-gradient-to-br from-E8DEF8/90 to-F3EDF7/80 backdrop-blur-xl border-white/70 shadow 0_4px_12px_rgba(103,80,164,0.08) + inset white`
-- **Text**: `TODAY - DAILY ONLY` `10px tracking 0.12em #6750A4`, count `26px black`, `Resets midnight • Not lifetime` `10px #79747E`
+- **Text**: `TODAY - DAILY ONLY` `10px tracking 0.12em #6750A4`, count `26px black`, `Resets midnight Not lifetime` `10px #79747E`
 - **Healthy pill**: `bg-#D1F0D6 text-#0B3722 border-#A8DAB5/50 backdrop-blur-xl`
 - **Progress**: `h-8px bg-#E8DEF8/70 backdrop-blur-xl p-2px border-white/60`, fill `from-#D0BCFF to-#B69DF8`
 
