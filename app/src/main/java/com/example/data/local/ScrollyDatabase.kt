@@ -15,10 +15,6 @@ import com.example.data.local.entity.ScrollEventEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
 
 @Database(
     entities = [
@@ -54,31 +50,14 @@ abstract class ScrollyDatabase : RoomDatabase() {
             }
         }
 
-        fun getTodayDate(): String {
-            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            return sdf.format(Date())
-        }
+        // Date keys are storage keys and must not depend on the device locale; see DateKeys.
+        fun getTodayDate(): String = DateKeys.day()
 
-        fun getDateOffset(daysOffset: Int): String {
-            val cal = Calendar.getInstance()
-            cal.add(Calendar.DAY_OF_YEAR, daysOffset)
-            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            return sdf.format(cal.time)
-        }
+        fun getDateOffset(daysOffset: Int): String = DateKeys.dayOffset(daysOffset)
 
-        fun getMonthPrefix(offsetMonths: Int = 0): String {
-            val cal = Calendar.getInstance()
-            cal.add(Calendar.MONTH, offsetMonths)
-            val sdf = SimpleDateFormat("yyyy-MM", Locale.getDefault())
-            return sdf.format(cal.time)
-        }
+        fun getMonthPrefix(offsetMonths: Int = 0): String = DateKeys.month(offsetMonths)
 
-        fun getYearPrefix(offsetYears: Int = 0): String {
-            val cal = Calendar.getInstance()
-            cal.add(Calendar.YEAR, offsetYears)
-            val sdf = SimpleDateFormat("yyyy", Locale.getDefault())
-            return sdf.format(cal.time)
-        }
+        fun getYearPrefix(offsetYears: Int = 0): String = DateKeys.year(offsetYears)
     }
 
     private class DatabaseCallback : RoomDatabase.Callback() {

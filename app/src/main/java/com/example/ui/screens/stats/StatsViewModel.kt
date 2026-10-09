@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ScrollyApp
+import com.example.data.local.DateKeys
 import com.example.data.local.dao.AppLifetimeTotal
 import com.example.data.local.entity.DailyStatsEntity
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -104,7 +105,7 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
     private fun buildDayFlow(offset: Int) = kotlinx.coroutines.flow.flow {
         val cal = Calendar.getInstance()
         cal.add(Calendar.DAY_OF_YEAR, offset)
-        val sdfDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val sdfDate = DateKeys.formatter(DateKeys.DAY_PATTERN)
         val targetDate = sdfDate.format(cal.time)
 
         val periodLabel = when (offset) {
@@ -170,7 +171,7 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
         cal.add(Calendar.WEEK_OF_YEAR, offset)
         cal.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
 
-        val sdfDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val sdfDate = DateKeys.formatter(DateKeys.DAY_PATTERN)
         val sdfShort = SimpleDateFormat("MMM d", Locale.getDefault())
         val sdfDayName = SimpleDateFormat("EEE", Locale.getDefault())
 
@@ -190,7 +191,7 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
             trackingRepo.getAppStatsSummaryBetweenFlow(startDate, endDate)
         ) { dailyList, appSummaries ->
             val statsMap = dailyList.associateBy { it.date }
-            val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Calendar.getInstance().time)
+            val todayStr = DateKeys.formatter(DateKeys.DAY_PATTERN).format(Calendar.getInstance().time)
 
             val bars = weekDates.map { (dateStr, dayName, _) ->
                 val count = statsMap[dateStr]?.totalScrolls ?: 0
@@ -226,7 +227,7 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
     private fun buildMonthFlow(offset: Int) = kotlinx.coroutines.flow.flow {
         val cal = Calendar.getInstance()
         cal.add(Calendar.MONTH, offset)
-        val sdfMonthPrefix = SimpleDateFormat("yyyy-MM", Locale.getDefault())
+        val sdfMonthPrefix = DateKeys.formatter(DateKeys.MONTH_PATTERN)
         val sdfMonthLabel = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
         val monthPrefix = sdfMonthPrefix.format(cal.time)
         val periodLabel = sdfMonthLabel.format(cal.time)
@@ -239,12 +240,12 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
             val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
 
             // Group into 4-5 weeks
-            val week1Count = (1..7).sumOf { day -> statsMap[String.format("%s-%02d", monthPrefix, day)]?.totalScrolls ?: 0 }
-            val week2Count = (8..14).sumOf { day -> statsMap[String.format("%s-%02d", monthPrefix, day)]?.totalScrolls ?: 0 }
-            val week3Count = (15..21).sumOf { day -> statsMap[String.format("%s-%02d", monthPrefix, day)]?.totalScrolls ?: 0 }
-            val week4Count = (22..28).sumOf { day -> statsMap[String.format("%s-%02d", monthPrefix, day)]?.totalScrolls ?: 0 }
+            val week1Count = (1..7).sumOf { day -> statsMap[DateKeys.child(monthPrefix, day)]?.totalScrolls ?: 0 }
+            val week2Count = (8..14).sumOf { day -> statsMap[DateKeys.child(monthPrefix, day)]?.totalScrolls ?: 0 }
+            val week3Count = (15..21).sumOf { day -> statsMap[DateKeys.child(monthPrefix, day)]?.totalScrolls ?: 0 }
+            val week4Count = (22..28).sumOf { day -> statsMap[DateKeys.child(monthPrefix, day)]?.totalScrolls ?: 0 }
             val week5Count = if (daysInMonth > 28) {
-                (29..daysInMonth).sumOf { day -> statsMap[String.format("%s-%02d", monthPrefix, day)]?.totalScrolls ?: 0 }
+                (29..daysInMonth).sumOf { day -> statsMap[DateKeys.child(monthPrefix, day)]?.totalScrolls ?: 0 }
             } else 0
 
             val bars = mutableListOf(
@@ -281,7 +282,7 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
     private fun buildYearFlow(offset: Int) = kotlinx.coroutines.flow.flow {
         val cal = Calendar.getInstance()
         cal.add(Calendar.YEAR, offset)
-        val sdfYear = SimpleDateFormat("yyyy", Locale.getDefault())
+        val sdfYear = DateKeys.formatter(DateKeys.YEAR_PATTERN)
         val yearStr = sdfYear.format(cal.time)
         val periodLabel = yearStr
 
@@ -291,7 +292,7 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
         ) { dailyList, appSummaries ->
             val monthNames = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
             val bars = monthNames.mapIndexed { idx, mName ->
-                val monthPrefix = String.format("%s-%02d", yearStr, idx + 1)
+                val monthPrefix = DateKeys.child(yearStr, idx + 1)
                 val monthTotal = dailyList.filter { it.date.startsWith(monthPrefix) }.sumOf { it.totalScrolls }
                 ChartBarData(
                     label = mName,

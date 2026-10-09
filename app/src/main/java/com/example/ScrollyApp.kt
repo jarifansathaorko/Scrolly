@@ -5,6 +5,7 @@ import android.util.Log
 import com.example.data.local.ScrollyDatabase
 import com.example.data.repository.GamificationRepository
 import com.example.data.repository.NotchSettingsRepository
+import com.example.data.repository.RoomTransactionRunner
 import com.example.data.repository.SocialRepository
 import com.example.data.repository.TrackingRepository
 import com.example.tracking.accessibility.AccessibilityHelper
@@ -38,7 +39,10 @@ class ScrollyApp : Application() {
         val firebaseManager = com.example.data.repository.FirebaseManager(this)
         
         database = ScrollyDatabase.getInstance(this)
-        trackingRepository = TrackingRepository(database.scrollyDao())
+        trackingRepository = TrackingRepository(
+            dao = database.scrollyDao(),
+            transactions = RoomTransactionRunner(database)
+        )
         gamificationRepository = GamificationRepository(database.scrollyDao(), this, firebaseManager)
         socialRepository = SocialRepository(database.scrollyDao(), firebaseManager)
         notchSettingsRepository = NotchSettingsRepository(this)

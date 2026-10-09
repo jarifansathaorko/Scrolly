@@ -201,8 +201,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             }
             trackingRepo.recordScroll(packageName, appName, count)
 
-            // Update live floating bar if preview is active or service running
-            val newTotal = liveTotalScrolls.value + count
+            // Update live floating bar if preview is active or service running. recordScroll has
+            // already applied `count` to the live total, so it must not be added a second time.
+            val newTotal = liveTotalScrolls.value
             ScrollyApp.instance.getActiveFloatingBar()?.updateCount(newTotal, appName)
         }
     }

@@ -60,6 +60,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.BuildConfig
 import com.example.ui.components.AppIconBadge
 import com.example.ui.components.NotchBarPreview
 import com.example.ui.components.NotchDynamicIslandCustomizer
@@ -574,79 +575,83 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // --- LIVE SCROLL TESTER ---
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(28.dp))
-                    .border(1.dp, SleekBorder, RoundedCornerShape(28.dp)),
-                colors = CardDefaults.cardColors(containerColor = SleekCardSurface)
-            ) {
-                Column(
+            // Debug builds only: the tester writes simulated scrolls into the real database, which
+            // would otherwise be indistinguishable from genuine usage in release builds.
+            if (BuildConfig.DEBUG) {
+                // --- LIVE SCROLL TESTER ---
+                Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(18.dp)
+                        .clip(RoundedCornerShape(28.dp))
+                        .border(1.dp, SleekBorder, RoundedCornerShape(28.dp)),
+                    colors = CardDefaults.cardColors(containerColor = SleekCardSurface)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.FlashOn,
-                            contentDescription = "Test",
-                            tint = SleekPrimary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Live Scroll Tester (Dev & Emulator)",
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = SleekPrimary
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Tap to simulate scroll events on selected app and verify real-time counter & floating island:",
-                        style = MaterialTheme.typography.bodySmall.copy(color = SleekTextSecondary)
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(18.dp)
                     ) {
-                        Button(
-                            onClick = { viewModel.simulateScroll(selectedAppForSim, 1) },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = SleekPrimary),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text("+1 Scroll", style = MaterialTheme.typography.labelMedium.copy(color = Color.White, fontWeight = FontWeight.Bold))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.FlashOn,
+                                contentDescription = "Test",
+                                tint = SleekPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Live Scroll Tester (Dev & Emulator)",
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = SleekPrimary
+                                )
+                            )
                         }
 
-                        Button(
-                            onClick = { viewModel.simulateScroll(selectedAppForSim, 5) },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = SleekCardSurfaceElevated),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text("+5", style = MaterialTheme.typography.labelMedium.copy(color = SleekPillText, fontWeight = FontWeight.Bold))
-                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Tap to simulate scroll events on selected app and verify real-time counter & floating island:",
+                            style = MaterialTheme.typography.bodySmall.copy(color = SleekTextSecondary)
+                        )
 
-                        Button(
-                            onClick = { viewModel.simulateScroll(selectedAppForSim, 20) },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = SleekCardSurfaceElevated),
-                            shape = RoundedCornerShape(14.dp)
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("+20", style = MaterialTheme.typography.labelMedium.copy(color = SleekPillText, fontWeight = FontWeight.Bold))
+                            Button(
+                                onClick = { viewModel.simulateScroll(selectedAppForSim, 1) },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = SleekPrimary),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Text("+1 Scroll", style = MaterialTheme.typography.labelMedium.copy(color = Color.White, fontWeight = FontWeight.Bold))
+                            }
+
+                            Button(
+                                onClick = { viewModel.simulateScroll(selectedAppForSim, 5) },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = SleekCardSurfaceElevated),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Text("+5", style = MaterialTheme.typography.labelMedium.copy(color = SleekPillText, fontWeight = FontWeight.Bold))
+                            }
+
+                            Button(
+                                onClick = { viewModel.simulateScroll(selectedAppForSim, 20) },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = SleekCardSurfaceElevated),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Text("+20", style = MaterialTheme.typography.labelMedium.copy(color = SleekPillText, fontWeight = FontWeight.Bold))
+                            }
                         }
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+            }
 
             // --- RELIABILITY & PERMISSIONS CONTROL CENTER ---
             Card(
