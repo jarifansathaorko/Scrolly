@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   build-web:
@@ -30,8 +31,6 @@ jobs:
     needs: build-web
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -47,28 +46,20 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Sync Capacitor
-        id: sync
         run: |
-          set -o pipefail
-          npx cap doctor 2>&1 | tee /tmp/doctor.log
-          npx cap copy android 2>&1 | tee /tmp/copy.log
-          echo "COPY_EXIT:${PIPESTATUS[0]}" | tee -a /tmp/copy.log
-          npx cap update android 2>&1 | tee /tmp/update.log
-          echo "UPDATE_EXIT:${PIPESTATUS[0]}" | tee -a /tmp/update.log
-      - name: Push logs on failure
+          npx cap doctor
+          npx cap copy android 2>&1 | tee copy.log
+          npx cap update android 2>&1 | tee update.log
+      - name: Create issue on failure
         if: failure()
         run: |
-          echo "Pushing logs..."
-          git config user.name "CI"
-          git config user.email "ci@brainrot.app"
-          git checkout -B debug-logs
-          cp /tmp/*.log ./ 2>/dev/null || true
-          ls -lh *.log
-          cat /tmp/copy.log
-          cat /tmp/update.log
-          git add *.log
-          git commit -m "logs for run $GITHUB_RUN_ID" || true
-          git push origin debug-logs --force
+          echo "Creating issue with logs..."
+          cat copy.log
+          cat update.log
+          BODY=$(cat copy.log update.log | tail -n 200 | head -c 60000)
+          gh api repos/${{ github.repository }}/issues -f title="Build failed run $GITHUB_RUN_ID" -f body="Logs:\n\`\`\`\n$BODY\n\`\`\`" || echo "failed to create issue"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build Debug APK
         run: |
           cd android
