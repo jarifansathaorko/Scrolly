@@ -12,40 +12,28 @@ jobs:
     name: 🌐 Build Web
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-      - name: Install dependencies
-        run: npm ci
-      - name: Lint
-        run: npm run lint
-      - name: Build web
-        run: npm run build
-      - name: Upload web artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-dist
-          path: dist/
-          retention-days: 7
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
 
   build-android:
     name: 🤖 Build Android APK
     runs-on: ubuntu-latest
     needs: build-web
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -53,74 +41,43 @@ jobs:
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
-      - name: Install dependencies
-        run: npm ci
-      - name: Build web
-        run: |
-          npm run build
-          ls -lh dist/
+      - run: npm ci
+      - run: npm run build
       - name: Sync Capacitor
         id: sync
         run: |
-          set +e
           echo "=== CAP DOCTOR ==="
           npx cap doctor
-          echo "=== CAP CONFIG ==="
-          cat capacitor.config.ts
-          echo "=== ANDROID DIR ==="
+          echo "=== BUILD ==="
+          ls -lh dist/ | head
+          echo "=== ANDROID ==="
           ls -la android/
-          echo "=== TRY COPY ==="
-          npx cap copy android > /tmp/cap-copy.log 2>&1
-          echo "copy exit: $?"
-          cat /tmp/cap-copy.log
-          echo "=== TRY UPDATE ==="
-          npx cap update android > /tmp/cap-update.log 2>&1
-          echo "update exit: $?"
-          cat /tmp/cap-update.log
-          echo "=== TRY SYNC ==="
-          npx cap sync android > /tmp/cap-sync.log 2>&1
-          SYNC_EXIT=$?
-          echo "sync exit: $SYNC_EXIT"
-          cat /tmp/cap-sync.log
-          cat /tmp/cap-copy.log /tmp/cap-update.log /tmp/cap-sync.log > ./full-sync.log
-          exit $SYNC_EXIT
-      - name: Save logs to repo on failure
-        if: failure()
-        run: |
-          git config user.name "CI Bot"
-          git config user.email "ci@brainrot.app"
-          git fetch origin debug-logs || true
-          git checkout -B debug-logs
-          cp /tmp/cap-copy.log ./cap-copy.log || echo "no copy log" > ./cap-copy.log
-          cp /tmp/cap-update.log ./cap-update.log || echo "no update log" > ./cap-update.log
-          cp /tmp/cap-sync.log ./cap-sync.log || echo "no sync log" > ./cap-sync.log
-          cat ./cap-copy.log ./cap-update.log ./cap-sync.log > ./full-sync.log
-          echo "=== FULL LOG ==="
-          cat ./full-sync.log
-          git add cap-copy.log cap-update.log cap-sync.log full-sync.log
-          git commit -m "ci: sync failure logs [run $GITHUB_RUN_ID]" || echo "no changes"
-          git push origin debug-logs --force
+          echo "=== COPY ==="
+          npx cap copy android
+          echo "=== UPDATE ==="
+          npx cap update android
+          echo "=== SYNC DONE ==="
+          ls -lh android/app/src/main/assets/public/ | head
       - name: Build Debug APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../gradle-build.log
-          ls -lh app/build/outputs/apk/debug/ || true
-      - name: Save gradle log on failure
-        if: failure()
-        run: |
-          git config user.name "CI Bot"
-          git config user.email "ci@brainrot.app"
-          git fetch origin debug-logs || true
-          git checkout -B debug-logs
-          cp ../gradle-build.log ./gradle-build.log || cp gradle-build.log ./gradle-build.log || echo "no gradle log" > ./gradle-build.log
-          cat ./gradle-build.log | tail -n 200
-          git add gradle-build.log
-          git commit -m "ci: gradle failure logs [run $GITHUB_RUN_ID]" || true
-          git push origin debug-logs --force
+          ./gradlew assembleDebug --no-daemon --stacktrace
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: brainrot-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
+      - name: Build Release APK
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/arena/')
+        run: |
+          cd android
+          ./gradlew assembleRelease --no-daemon
+      - name: Upload Release APK
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/arena/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: brainrot-release-apk
+          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 30
