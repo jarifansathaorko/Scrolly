@@ -60,22 +60,30 @@ jobs:
       - name: Setup Android SDK
         run: |
           echo "ANDROID_HOME: $ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT: $ANDROID_SDK_ROOT"
           ls -la $ANDROID_HOME/cmdline-tools/ || true
-          # Accept licenses
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-          # Install required packages (ignore if already installed)
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --list_installed || true
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build web
-        run: npm run build
+        run: |
+          npm run build
+          ls -lh dist/ | head -n 20
+
+      - name: Debug files
+        run: |
+          pwd
+          ls -la
+          cat capacitor.config.ts
+          ls -la android/ | head -n 20
+          cat android/app/src/main/res/values/strings.xml
 
       - name: Sync Capacitor
-        run: npx cap sync android
+        run: |
+          npx cap --version
+          npx cap sync android --verbose || npx cap sync
 
       - name: Build Debug APK
         run: |
